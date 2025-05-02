@@ -2,40 +2,38 @@ from textual.app import App
 from widgets.hex_view import *
 from textual.containers import Grid
 from textual.reactive import reactive
-from textual.widgets import Placeholder, DirectoryTree
+from textual.widgets import Placeholder, DirectoryTree, TextArea
 
 
 class BintvApp(App):
     DEFAULT_CSS = '''
     Screen {
-        height: 2fr;
-        width: 6fr;
         layers: below above;
         align: center middle;
     }
 
     #construct-editor {
         layer: below;
-        height: 1fr;
-        width: 2fr;
+        height: 50%;
+        min-width: 25%;
     }
     
     #construct-data {
         layer: below;
-        height: 1fr;
-        width: 2fr;
+        height: 50%;
+        min-width: 25%;
     }
     
     #hex-view {
         layer: below;
-        height: 2fr;
-        width: 4fr;
+        height: 100%;
+        min-width: 75%;
     }
 
     #hex-view-bottom-line {
         layer: below;
         height: 1;
-        width: 2fr;
+        min-width: 75%;
     }
 
     #file-chooser {
@@ -53,7 +51,7 @@ class BintvApp(App):
     def compose(self):
         with Horizontal():
             with Vertical():
-                yield Placeholder(id="construct-editor")
+                yield TextArea(id="construct-editor")
                 yield Placeholder(id="construct-data")
             with Vertical():
                 yield HexView(id='hex-view')
