@@ -17,7 +17,7 @@ from rich.segment import Segment, Segments
 class HexView(ScrollView):
     nibble_cursor = reactive(0)
     cursor_visible = reactive(True)
-    data = reactive(bytearray(b'asdfasdfasdf'))
+    data = reactive(bytearray(b''))
     blinking = reactive(True)
     edit_mode = reactive(False)
     buffer = {}
@@ -39,12 +39,17 @@ class HexView(ScrollView):
             self.data_addr = data_addr
             super().__init__(*args, **kwargs)
 
+    class CursorUpdate(Message):
+        def __init__(self, offset, *args, **kwargs):
+            self.offset = offset
+            super().__init__(*args, **kwargs)
+
     def get_byte_cursor(self):
         return self.nibble_cursor >> 1
 
     def generate_ascii_segments(self, offset, line_data):
         cursor = self.get_byte_cursor()
-        segments = [Segment(" | ")]
+        segments = [Segment("| ")]
         for i,b in enumerate(line_data):
             txt = "."
             styles = [Style(color='green')]
@@ -84,7 +89,6 @@ class HexView(ScrollView):
 
                 segments.append(Segment(txt, Style.chain(*styles)))
                 segments.append(Segment(" "))
-            segments.append(Segment(" "))
 
         return segments
 
@@ -160,24 +164,28 @@ class HexView(ScrollView):
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
+        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def action_cursor_left(self):
         next_nibble_cursor = self.nibble_cursor - (1<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) >= 0:
             self.nibble_cursor = next_nibble_cursor
+        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def action_cursor_up(self):
         next_nibble_cursor = self.nibble_cursor - (32<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) >= 0:
             self.nibble_cursor = next_nibble_cursor
+        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def action_cursor_down(self):
         next_nibble_cursor = self.nibble_cursor + (32<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
+        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def extract_sequential_changes(self):
         changes = []
