@@ -60,6 +60,8 @@ class BintvApp(App):
 
     def _on_mount(self):
         if self.target:
+            self.query_one("#file-chooser").visible = False
             with open(self.target, 'rb') as f:
                 data = f.read()
             self.query_one('#hex-view').data = bytearray(data)
+        
