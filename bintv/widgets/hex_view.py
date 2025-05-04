@@ -40,8 +40,9 @@ class HexView(ScrollView):
             super().__init__(*args, **kwargs)
 
     class CursorUpdate(Message):
-        def __init__(self, offset, *args, **kwargs):
+        def __init__(self, id, offset, *args, **kwargs):
             self.offset = offset
+            self.id = id
             super().__init__(*args, **kwargs)
 
     def get_byte_cursor(self):
@@ -164,28 +165,28 @@ class HexView(ScrollView):
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
-        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
+        self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
     def action_cursor_left(self):
         next_nibble_cursor = self.nibble_cursor - (1<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) >= 0:
             self.nibble_cursor = next_nibble_cursor
-        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
+        self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
     def action_cursor_up(self):
         next_nibble_cursor = self.nibble_cursor - (16<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) >= 0:
             self.nibble_cursor = next_nibble_cursor
-        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
+        self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
     def action_cursor_down(self):
         next_nibble_cursor = self.nibble_cursor + (16<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
-        self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
+        self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
     def extract_sequential_changes(self):
         changes = []
@@ -216,15 +217,4 @@ class HexView(ScrollView):
         if changes:
             self.post_message(self.CommitChanges(self.data_addr, changes))
             self.buffer = {}
-
-class HexPane(TabPane):
-    offset = 0
-
-    def compose(self):
-        yield HexView(id=f"{self.id}-hex-view")
-        yield Static(hex(self.offset), id=f"{self.id}-hex-view-bottom-line")
-        
-    def on_hex_view_cursor_update(self, msg):
-        self.offset = msg.offset
-        self.query_one(f"#{self.id}-hex-view-bottom-line").update(hex(self.offset))
 
