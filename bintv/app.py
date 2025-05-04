@@ -1,13 +1,25 @@
-import json
+from widgets.hex_view import *
 
 from textual.app import App
-from widgets.hex_view import *
+from textual.screen import Screen
 from textual.containers import Grid
 from textual.reactive import reactive
 from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
 
+import json
 from construct import *
 import construct.core as construct_core
+
+
+class AlignmentScreen(Screen):
+    BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
+    
+    def __init__(self, targets):
+        self.targets = targets
+
+    def _on_mount(self):
+        for target in targets:
+            self.mount(target)
 
 
 class BintvApp(App):
@@ -49,7 +61,7 @@ class BintvApp(App):
     }
     '''
     
-    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+q", "quit", "Quit application")]
+    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+a", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
         if not self.query_one("#file-chooser").visible:
@@ -57,6 +69,9 @@ class BintvApp(App):
             self.set_focus(self.query_one("#file-chooser"))
         else:
             self.query_one("#file-chooser").visible = False 
+
+    def action_align(self):
+        self.install_screen("alignment-screen", AlignmentScreen([self.query_one(f"#hex-pane-{i}-hex-view") for i in range(1, self.pane_count+1)]))
 
     def action_quit(self):
         self.exit()
