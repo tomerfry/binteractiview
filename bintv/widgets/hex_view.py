@@ -116,8 +116,8 @@ class HexView(ScrollView):
     def render_line(self, y):
         scroll_x, scroll_y = self.scroll_offset
         y += scroll_y
-        if y < (len(self.data) // 32)+1:
-            return Strip(self.generate_line(y*32, self.data[y*32:(y+1)*32]))
+        if y < (len(self.data) // 16)+1:
+            return Strip(self.generate_line(y*16, self.data[y*16:(y+1)*16]))
         return Strip.blank(20, self.rich_style)
 
     def set_value_at_cursor(self, digit):
@@ -216,3 +216,15 @@ class HexView(ScrollView):
         if changes:
             self.post_message(self.CommitChanges(self.data_addr, changes))
             self.buffer = {}
+
+class HexPane(TabPane):
+    offset = 0
+
+    def compose(self):
+        yield HexView(id=f"{self.id}-hex-view")
+        yield Static(hex(self.offset), id=f"{self.id}-hex-view-bottom-line")
+        
+    def on_hex_view_cursor_update(self, msg):
+        self.offset = msg.offset
+        self.query_one(f"#{self.id}-hex-view-bottom-line").update(hex(self.offset))
+

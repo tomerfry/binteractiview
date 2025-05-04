@@ -4,7 +4,7 @@ from textual.app import App
 from widgets.hex_view import *
 from textual.containers import Grid
 from textual.reactive import reactive
-from textual.widgets import Placeholder, DirectoryTree, TextArea
+from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
 
 from construct import *
 import construct.core as construct_core
@@ -47,6 +47,11 @@ class BintvApp(App):
         height: 50%;
     }
     '''
+    
+    BINDINGS = [("l", "load_binary", "Load binary file")]
+
+    def action_load_binary(self):
+        pass
 
     def __init__(self, target):
         super().__init__()
@@ -65,8 +70,8 @@ class BintvApp(App):
                 yield TextArea(id="construct-editor")
                 yield Tree("Construct", id="construct-tree")
             with Vertical():
-                yield HexView(id='hex-view')
-                yield Static(hex(self.offset), id='hex-view-bottom-line')
+                with TabbedContent(id="tabbed-content"):
+                    yield HexPane("HexPane-0", id="hex-pane-0")
         yield DirectoryTree("./", id="file-chooser") 
 
     def _on_mount(self):
@@ -74,12 +79,8 @@ class BintvApp(App):
             self.query_one("#file-chooser").visible = False
             with open(self.target, 'rb') as f:
                 self.data = f.read()
-            self.query_one('#hex-view').data = bytearray(self.data)
+            self.query_one('#hex-pane-0-hex-view').data = bytearray(self.data)
         
-    def on_hex_view_cursor_update(self, msg):
-        self.offset = msg.offset
-        self.query_one('#hex-view-bottom-line').update(hex(self.offset))
-
     def on_text_area_changed(self, msg):
         try:
             evaluate_construct_expr(msg)
