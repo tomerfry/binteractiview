@@ -14,7 +14,8 @@ AUTHOR = "Tomer Goldschmidt"
 # Required packages
 REQUIRED = [
     "textual",
-    "construct"
+    "construct",
+    "numpy"
 ]
 
 
