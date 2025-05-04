@@ -45,17 +45,24 @@ class BintvApp(App):
         layer: above;
         width: 50%;
         height: 50%;
+        border: tall blue;
     }
     '''
     
-    BINDINGS = [("l", "load_binary", "Load binary file")]
+    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
-        pass
+        if not self.query_one("#file-chooser").visible:
+            self.query_one("#file-chooser").visible = True            
+        else:
+            self.query_one("#file-chooser").visible = False 
+
+    def action_quit(self):
+        self.exit()
 
     def __init__(self, target):
         super().__init__()
-        self.data = bytearray(b'')
+        self.data = bytearray(b"")
         self.target = target
         self.offset = 0
     
@@ -77,9 +84,9 @@ class BintvApp(App):
     def _on_mount(self):
         if self.target:
             self.query_one("#file-chooser").visible = False
-            with open(self.target, 'rb') as f:
+            with open(self.target, "rb") as f:
                 self.data = f.read()
-            self.query_one('#hex-pane-0-hex-view').data = bytearray(self.data)
+            self.query_one("#hex-pane-0-hex-view").data = bytearray(self.data)
         
     def on_text_area_changed(self, msg):
         try:

@@ -153,7 +153,7 @@ class HexView(ScrollView):
 
     async def watch_nibble_cursor(self):
         scroll_y = self.scroll_offset.y
-        cursor_y = self.nibble_cursor // 32
+        cursor_y = self.nibble_cursor // 16 
         if cursor_y < scroll_y:
             self.scroll_to(y=cursor_y, animate=False)
         elif cursor_y >= scroll_y + self.size.height:
@@ -174,14 +174,14 @@ class HexView(ScrollView):
         self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def action_cursor_up(self):
-        next_nibble_cursor = self.nibble_cursor - (32<<1)
+        next_nibble_cursor = self.nibble_cursor - (16<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) >= 0:
             self.nibble_cursor = next_nibble_cursor
         self.post_message(self.CursorUpdate(self.nibble_cursor >> 1))
 
     def action_cursor_down(self):
-        next_nibble_cursor = self.nibble_cursor + (32<<1)
+        next_nibble_cursor = self.nibble_cursor + (16<<1)
         next_nibble_cursor = next_nibble_cursor & ~1
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
