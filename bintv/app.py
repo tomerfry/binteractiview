@@ -1,7 +1,7 @@
 from widgets.hex_view import *
 
 from textual.app import App
-from textual.screen import Screen
+from textual.screen import ModalScreen
 from textual.containers import Grid
 from textual.reactive import reactive
 from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
@@ -11,15 +11,17 @@ from construct import *
 import construct.core as construct_core
 
 
-class AlignmentScreen(Screen):
+class AlignmentScreen(ModalScreen):
     BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
     
-    def __init__(self, targets):
+    def __init__(self, targets, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.targets = targets
 
-    def _on_mount(self):
-        for target in targets:
-            self.mount(target)
+    def compose(self):
+        with Horizontal():
+            for target in self.targets:
+                yield Static("asdfasddf")
 
 
 class BintvApp(App):
@@ -60,7 +62,6 @@ class BintvApp(App):
         border: tall blue;
     }
     '''
-    
     BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+a", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
@@ -71,7 +72,7 @@ class BintvApp(App):
             self.query_one("#file-chooser").visible = False 
 
     def action_align(self):
-        self.install_screen("alignment-screen", AlignmentScreen([self.query_one(f"#hex-pane-{i}-hex-view") for i in range(1, self.pane_count+1)]))
+        self.push_screen(AlignmentScreen(targets=['a']))
 
     def action_quit(self):
         self.exit()
