@@ -1,4 +1,4 @@
-from bintv.widgets.hex_view import *
+from widgets.hex_view import *
 
 from textual.app import App
 from textual.geometry import Size 
@@ -97,9 +97,8 @@ class BintvApp(App):
                 yield Tree("Construct", id="construct-tree")
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
-                    pass
-                    # self.pane_count += 1
-                    # yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
+                    self.pane_count += 1
+                    yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
         yield DirectoryTree("./", id="file-chooser") 
 
     def _on_mount(self):
