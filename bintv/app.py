@@ -1,4 +1,5 @@
 from widgets.hex_view import *
+from widgets.reactive_construct_tree import *
 
 from textual.app import App
 from textual.geometry import Size 
@@ -85,16 +86,11 @@ class BintvApp(App):
         self.offset = 0
         self.pane_count = 0
     
-    def evaluate_construct_expr(self, msg):
-        self._subcons_text = msg.text_area.text
-        self._construct = eval(self._subcons_text)
-        self._construct.parse(self.data)
-
     def compose(self):
         with Horizontal():
             with Vertical():
                 yield TextArea(id="construct-editor")
-                yield Tree("Construct", id="construct-tree")
+                yield ReactiveConstructTree(id="construct-tree")
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
                     self.pane_count += 1
@@ -115,7 +111,10 @@ class BintvApp(App):
 
     def on_text_area_changed(self, msg):
         try:
-            evaluate_construct_expr(msg)
+            self._subcons_text = msg.text_area.text
+            self._construct = eval(self._subcons_text)
+            self._parsed_data = self._construct.parse(self.data)
+            self.query_one("#construct-tree").parsed_data = self._parsed_data
         except Exception as e:
             pass
 
