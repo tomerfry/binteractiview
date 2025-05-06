@@ -1,5 +1,5 @@
 import argparse
-from app import BintvApp
+from bintv.app import BintvApp
 
 
 def parse_args():
