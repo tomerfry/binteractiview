@@ -63,7 +63,7 @@ class BintvApp(App):
         border: tall blue;
     }
     '''
-    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+a", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
+    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
         if not self.query_one("#file-chooser").visible:
