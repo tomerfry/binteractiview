@@ -1,9 +1,10 @@
 from widgets.hex_view import *
 
 from textual.app import App
-from textual.screen import ModalScreen
+from textual.geometry import Size 
 from textual.containers import Grid
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
 
 import json
@@ -72,7 +73,7 @@ class BintvApp(App):
             self.query_one("#file-chooser").visible = False 
 
     def action_align(self):
-        self.push_screen(AlignmentScreen(targets=['a']))
+        self.push_screen(AlignmentScreen(targets=['a', 'b']))
 
     def action_quit(self):
         self.exit()
@@ -108,6 +109,8 @@ class BintvApp(App):
             with open(self.target, "rb") as f:
                 self.data = f.read()
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, 100)
 
     def on_text_area_changed(self, msg):
         try:

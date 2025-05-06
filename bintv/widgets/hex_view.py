@@ -22,22 +22,18 @@ class HexView(ScrollView):
     edit_mode = reactive(False)
     buffer = {}
     data_addr = reactive(0)
-    virtual_size = Size(112,10)
+    virtual_size = Size(60,1)
 
     BINDINGS = [
         Binding("up", "cursor_up", "Cursor Up", show=False),
+        Binding("k", "cursor_up", "Cursor Up", show=False),
         Binding("down", "cursor_down", "Cursor Down", show=False),
+        Binding("j", "cursor_down", "Cursor Down", show=False),
         Binding("left", "cursor_left", "Cursor Left", show=False),
+        Binding("h", "cursor_left", "Cursor Left", show=False),
         Binding("right", "cursor_right", "Cursor Right", show=False),
-        Binding("enter", "commit_changes", "Commit Changes", show=False)
+        Binding("l", "cursor_right", "Cursor Right", show=False)
     ]
-
-
-    class CommitChanges(Message):
-        def __init__(self, data_addr, changes, *args, **kwargs):
-            self.changes = changes
-            self.data_addr = data_addr
-            super().__init__(*args, **kwargs)
 
     class CursorUpdate(Message):
         def __init__(self, id, offset, *args, **kwargs):
@@ -121,20 +117,6 @@ class HexView(ScrollView):
             return Strip(self.generate_line(y*16, self.data[y*16:(y+1)*16]))
         return Strip.blank(20, self.rich_style)
 
-    def set_value_at_cursor(self, digit):
-        c = int(f'0x{digit}', 16)
-        curr_val = self.data[self.nibble_cursor>>1]
-
-        if self.nibble_cursor % 2 == 0:
-            new_val = (curr_val & (0x0f)) + (c << 4)
-        else:
-            new_val = (curr_val & (0xf0)) + c
-
-        self.data[self.nibble_cursor>>1] = new_val
-        self.buffer[self.nibble_cursor>>1] = new_val.to_bytes(1, 'little')
-        self.nibble_cursor += 1
-        self.mutate_reactive(HexView.data)
-
     def on_key(self, event):
         self.cursor_visible = True
         if event.key == 'insert':
@@ -154,7 +136,7 @@ class HexView(ScrollView):
 
     async def watch_nibble_cursor(self):
         scroll_y = self.scroll_offset.y
-        cursor_y = self.nibble_cursor // 16 
+        cursor_y = (self.nibble_cursor >> 1) // 16 
         if cursor_y < scroll_y:
             self.scroll_to(y=cursor_y, animate=False)
         elif cursor_y >= scroll_y + self.size.height:
@@ -187,34 +169,4 @@ class HexView(ScrollView):
         if (next_nibble_cursor>>1) < len(self.data):
             self.nibble_cursor = next_nibble_cursor
         self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
-
-    def extract_sequential_changes(self):
-        changes = []
-        sorted_keys = sorted(self.buffer.keys())
-        if not sorted_keys:
-            return []
-
-        current_sequence = [sorted_keys[0]]
-        sequence_bytes = bytes(self.buffer[sorted_keys[0]])
-        for prev,curr in zip(sorted_keys, sorted_keys[1:]):
-            if curr == prev + 1:
-                current_sequence.append(curr)
-                sequence_bytes = b''.join([sequence_bytes, self.buffer[curr]])
-            else:
-                changes.append((current_sequence, sequence_bytes))
-                current_sequence = [curr]
-                sequence_bytes = bytes(self.buffer[curr])
-
-        if current_sequence:
-            changes.append((current_sequence, sequence_bytes))
-        return changes
-
-    def action_commit_changes(self):
-        if self.edit_mode:
-            self.edit_mode = False
-        
-        changes = self.extract_sequential_changes()
-        if changes:
-            self.post_message(self.CommitChanges(self.data_addr, changes))
-            self.buffer = {}
 
