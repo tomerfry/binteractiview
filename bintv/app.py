@@ -1,5 +1,5 @@
-from widgets.hex_view import *
-from widgets.reactive_construct_tree import *
+from bintv.widgets.hex_view import *
+from bintv.widgets.reactive_construct_tree import *
 
 from textual.app import App
 from textual.geometry import Size 
@@ -93,22 +93,23 @@ class BintvApp(App):
                 yield ReactiveConstructTree(id="construct-tree")
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
-                    self.pane_count += 1
-                    yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
+                    pass
         yield DirectoryTree("./", id="file-chooser") 
 
     def _on_mount(self):
         self.set_focus(self.query_one("#file-chooser"))
+        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
         if self.target:
             self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
             self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))
             self.query_one("#file-chooser").visible = False
             with open(self.target, "rb") as f:
                 self.data = f.read()
+            self.on_tabbed_content_tab_activated(TabbedContent.TabActivated(pane=self.query_one(f"#hex-pane-{self.pane_count}")))
+
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, 100)
-            self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
 
     def on_text_area_changed(self, msg):
         try:
