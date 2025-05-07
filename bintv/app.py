@@ -93,7 +93,8 @@ class BintvApp(App):
                 yield ReactiveConstructTree(id="construct-tree")
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
-                    pass
+                    if self.target:
+                        yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
         yield DirectoryTree("./", id="file-chooser") 
 
     def _on_mount(self):
@@ -105,11 +106,13 @@ class BintvApp(App):
             self.query_one("#file-chooser").visible = False
             with open(self.target, "rb") as f:
                 self.data = f.read()
-            self.on_tabbed_content_tab_activated(TabbedContent.TabActivated(pane=self.query_one(f"#hex-pane-{self.pane_count}")))
-
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, 100)
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
+
+            self.pane_count += 1
+            self._parsed_data = self._construct.parse(self.data)
+            self.query_one("#construct-tree").parsed_data = self._parsed_data
 
     def on_text_area_changed(self, msg):
         try:
@@ -133,6 +136,8 @@ class BintvApp(App):
         self.query_one("#tabbed-content").add_pane(TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
         self.set_focus(self.query_one(f"#hex-pane-{self.pane_count}-hex-view"))
 
         with open(msg.path, "rb") as f:
