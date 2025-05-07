@@ -89,7 +89,7 @@ class BintvApp(App):
     def compose(self):
         with Horizontal():
             with Vertical():
-                yield TextArea(id="construct-editor")
+                yield TextArea(id="construct-editor", text="Struct(\"content\" / GreedyBytes)")
                 yield ReactiveConstructTree(id="construct-tree")
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
@@ -108,11 +108,20 @@ class BintvApp(App):
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, 100)
+            self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
 
     def on_text_area_changed(self, msg):
         try:
             self._subcons_text = msg.text_area.text
             self._construct = eval(self._subcons_text)
+            self._parsed_data = self._construct.parse(self.data)
+            self.query_one("#construct-tree").parsed_data = self._parsed_data
+        except Exception as e:
+            pass
+
+    def on_tabbed_content_tab_activated(self, msg):
+        try:
+            self.data = self.query_one(f"#{msg.pane.id}-hex-view").data
             self._parsed_data = self._construct.parse(self.data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
         except Exception as e:
