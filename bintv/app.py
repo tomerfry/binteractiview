@@ -100,6 +100,7 @@ class BintvApp(App):
     def _on_mount(self):
         self.set_focus(self.query_one("#file-chooser"))
         self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
+        self.query_one("#construct-editor").language = "python"
         if self.target:
             self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
             self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))

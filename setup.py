@@ -15,7 +15,8 @@ AUTHOR = "Tomer Goldschmidt"
 REQUIRED = [
     "textual",
     "construct",
-    "numpy"
+    "numpy",
+    "bio"
 ]
 
 
