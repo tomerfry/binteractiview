@@ -8,6 +8,7 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
 
+import io
 import json
 from construct import *
 import construct.core as construct_core

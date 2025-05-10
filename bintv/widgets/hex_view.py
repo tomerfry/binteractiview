@@ -23,6 +23,7 @@ class HexView(ScrollView):
     buffer = {}
     data_addr = reactive(0)
     virtual_size = Size(60,1)
+    
 
     BINDINGS = [
         Binding("up", "cursor_up", "Cursor Up", show=False),
