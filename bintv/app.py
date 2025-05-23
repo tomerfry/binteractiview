@@ -6,7 +6,7 @@ from textual.geometry import Size
 from textual.containers import Grid
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
+from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane, Log
 
 import io
 import re
@@ -34,7 +34,7 @@ PRIMITIVES.sort(key=lambda x: len(x), reverse=True)
 class BintvApp(App):
     DEFAULT_CSS = '''
     Screen {
-        layers: below above;
+        layers: below above log;
         align: center middle;
     }
 
@@ -68,8 +68,17 @@ class BintvApp(App):
         height: 50%;
         border: tall blue;
     }
+
+    #log-panel {
+        layer: log;
+        width: 50%;
+        height: 50%;
+        border: solid $primary;
+        background: $panel;
+        visibility: hidden;
+    }
     '''
-    BINDINGS = [("ctrl+o", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
+    BINDINGS = [("ctrl+o", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+l", "toggle_log", "Toggle Log Panel"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
         if not self.query_one("#file-chooser").visible:
@@ -81,8 +90,33 @@ class BintvApp(App):
     def action_align(self):
         self.push_screen(AlignmentScreen(targets=['a', 'b']))
 
+    def action_toggle_log(self):
+        if not self.query_one("#log-panel").visible:
+            self.query_one("#log-panel").visible = True
+            self.set_focus(self.query_one("#log-panel"))
+        else:
+            self.query_one("#log-panel").visible = False
+
     def action_quit(self):
         self.exit()
+
+    def log_message(self, message: str, level: str = "info") -> None:
+        """Log a message to the log view."""
+        try:
+            log = self.query_one("#log-panel", Log)
+            
+            # Add color coding based on level
+            if level == "error":
+                formatted_message = f"ERROR: {message}"
+            elif level == "warning":
+                formatted_message = f"WARN: {message}"
+            else:
+                formatted_message = f"INFO: {message}"
+            
+            log.write_line(formatted_message)
+        except Exception:
+            # If log panel doesn't exist yet, just pass
+            pass
 
     def __init__(self, target):
         super().__init__()
@@ -100,9 +134,11 @@ class BintvApp(App):
                 with TabbedContent(id="tabbed-content"):
                     if self.target:
                         yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
+        yield Log(id="log-panel", auto_scroll=True, highlight=True)
         yield DirectoryTree("./", id="file-chooser") 
 
     def _on_mount(self):
+        self.log_message("Application Started!")
         self.set_focus(self.query_one("#file-chooser"))
         self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
         self.query_one("#construct-editor").language = "python"
@@ -125,14 +161,14 @@ class BintvApp(App):
             self._subcons_text = msg.text_area.text
             self._raw_copy = self._subcons_text.split('(')[0]
             self._raw_copy += re.sub(f"({"|".join(PRIMITIVES)})", "RawCopy(\\1)", self._subcons_text[self._subcons_text.find('('):])
+            self.log_message(self._raw_copy + "\n")
             self._construct = eval(self._subcons_text)
             self._raw_copy_construct = eval(self._raw_copy)
             self._parsed_data = self._construct.parse(self.data)
             self._raw_copy_parsed_data = self._raw_copy_construct.parse(self.data)
+            self.log_message(str(self._raw_copy_parsed_data))
             self.query_one("#construct-tree").parsed_data = self._parsed_data
         except Exception as e:
-            with open("/home/user/a.log", "a") as f:
-                f.write(str(e)+"\n")
             pass
 
     def on_tabbed_content_tab_activated(self, msg):
