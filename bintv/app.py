@@ -137,6 +137,49 @@ class BintvApp(App):
         yield Log(id="log-panel", auto_scroll=True, highlight=True)
         yield DirectoryTree("./", id="file-chooser") 
 
+
+    def flatten_construct_offsets(self, parent_prefix=""):
+        result = []
+        def process_item(name, value, parent_prefix=""):
+            full_name = f"{parent_prefix}.{name}" if parent_prefix else name
+            if hasattr(value, "offset1") and hasattr(value, "offset2"):
+                result.append({
+                    "name": full_name,
+                    "start": value.offset1,
+                    "end": value.offset2,
+                    "length": value.length,
+                    "value": value.value,
+                    "raw_data": value.data if hasattr(value, "data") else None
+                })
+
+                if isinstance(value.value, (dict, Container)):
+                    for sub_name, sub_value in value.items():
+                        process_item(sub_name, sub_value, full_name)
+
+            elif isinstance(value, (dict, Container)):
+                for sub_name, sub_value in value.items():
+                    process_item(sub_name, sub_value, full_name)
+            elif isinstance(value, list):
+                for i, item in enumerate(value):
+                    process_item(f"[{i}]", item, full_name)
+            else:
+                result.append({
+                    "name": full_name,
+                    "start": None,
+                    "end": None,
+                    "length": None,
+                    "value": value,
+                    "raw_data": None
+                })
+
+        if isinstance(self._parsed_data, (dict, Container)):
+            for name, value in self._parsed_data.items():
+                process_item(name, value, parent_prefix)
+        else:
+            process("root", self._parsed_data, parent_prefix)
+
+        return result
+
     def _on_mount(self):
         self.log_message("Application Started!")
         self.set_focus(self.query_one("#file-chooser"))
@@ -163,6 +206,8 @@ class BintvApp(App):
             self._parsed_data = self._construct.parse(self.data)
             self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
+            self._flattened_construct_data = self.flatten_construct_offsets()
+            self.log_message(self._flattened_construct_data)
         except Exception as e:
             self.log_message(str(e))
 
@@ -189,5 +234,13 @@ class BintvApp(App):
         self.query_one("#file-chooser").visible = False
 
     def on_hex_view_cursor_update(self, msg):
-        self.query_one(f"#{msg.id}-bottom-line").update(hex(msg.offset))
+        the_name = "root"
+        for item in self._flattened_construct_data:
+            name = item["name"]
+            start = item["start"]
+            end = item["end"]
+            if end and name and start <= msg.offset and msg.offset < end:
+                the_name = name
+        self.query_one(f"#{msg.id}-bottom-line").update(f"{hex(msg.offset)} - Currently on field {the_name}")
+
 
