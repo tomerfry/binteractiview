@@ -9,7 +9,9 @@ from textual.screen import ModalScreen
 from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane
 
 import io
+import re
 import json
+import construct
 from construct import *
 import construct.core as construct_core
 
@@ -26,6 +28,8 @@ class AlignmentScreen(ModalScreen):
             for target in self.targets:
                 yield Static("asdfasddf")
 
+PRIMITIVES = dir(construct)
+PRIMITIVES.sort(key=lambda x: len(x), reverse=True)
 
 class BintvApp(App):
     DEFAULT_CSS = '''
@@ -65,7 +69,7 @@ class BintvApp(App):
         border: tall blue;
     }
     '''
-    BINDINGS = [("ctrl+l", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
+    BINDINGS = [("ctrl+o", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
         if not self.query_one("#file-chooser").visible:
@@ -119,10 +123,16 @@ class BintvApp(App):
     def on_text_area_changed(self, msg):
         try:
             self._subcons_text = msg.text_area.text
+            self._raw_copy = self._subcons_text.split('(')[0]
+            self._raw_copy += re.sub(f"({"|".join(PRIMITIVES)})", "RawCopy(\\1)", self._subcons_text[self._subcons_text.find('('):])
             self._construct = eval(self._subcons_text)
+            self._raw_copy_construct = eval(self._raw_copy)
             self._parsed_data = self._construct.parse(self.data)
+            self._raw_copy_parsed_data = self._raw_copy_construct.parse(self.data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
         except Exception as e:
+            with open("/home/user/a.log", "a") as f:
+                f.write(str(e)+"\n")
             pass
 
     def on_tabbed_content_tab_activated(self, msg):
