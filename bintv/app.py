@@ -183,7 +183,6 @@ class BintvApp(App):
     def _on_mount(self):
         self.log_message("Application Started!")
         self.set_focus(self.query_one("#file-chooser"))
-        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
         self.query_one("#construct-editor").language = "python"
         if self.target:
             self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
@@ -198,6 +197,7 @@ class BintvApp(App):
             self.pane_count += 1
             self._parsed_data = self._construct.parse(self.data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
+            self.on_hex_view_cursor_update(HexView.CursorUpdate(f"hex-pane-{self.pane_count}-hex-view", 0x0))
 
     def on_text_area_changed(self, msg):
         try:
@@ -214,8 +214,7 @@ class BintvApp(App):
     def on_tabbed_content_tab_activated(self, msg):
         try:
             self.data = self.query_one(f"#{msg.pane.id}-hex-view").data
-            self._parsed_data = self._construct.parse(self.data)
-            self.query_one("#construct-tree").parsed_data = self._parsed_data
+            self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
         except Exception as e:
             pass
 
@@ -229,9 +228,12 @@ class BintvApp(App):
         self.set_focus(self.query_one(f"#hex-pane-{self.pane_count}-hex-view"))
 
         with open(msg.path, "rb") as f:
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(f.read())
+            self.data = f.read()
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
    
         self.query_one("#file-chooser").visible = False
+        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
+        self.on_hex_view_cursor_update(HexView.CursorUpdate(f"hex-pane-{self.pane_count}-hex-view", 0x0))
 
     def on_hex_view_cursor_update(self, msg):
         the_name = "root"
