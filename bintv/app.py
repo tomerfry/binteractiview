@@ -1,3 +1,4 @@
+from bintv.rawcopy_proxy import *
 from bintv.widgets.hex_view import *
 from bintv.widgets.reactive_construct_tree import *
 
@@ -14,7 +15,6 @@ import json
 import construct
 from construct import *
 import construct.core as construct_core
-
 
 class AlignmentScreen(ModalScreen):
     BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
@@ -159,17 +159,12 @@ class BintvApp(App):
     def on_text_area_changed(self, msg):
         try:
             self._subcons_text = msg.text_area.text
-            self._raw_copy = self._subcons_text.split('(')[0]
-            self._raw_copy += re.sub(f"({"|".join(PRIMITIVES)})", "RawCopy(\\1)", self._subcons_text[self._subcons_text.find('('):])
-            self.log_message(self._raw_copy + "\n")
-            self._construct = eval(self._subcons_text)
-            self._raw_copy_construct = eval(self._raw_copy)
+            self._construct = eval_with_rawcopy(self._subcons_text)
             self._parsed_data = self._construct.parse(self.data)
-            self._raw_copy_parsed_data = self._raw_copy_construct.parse(self.data)
-            self.log_message(str(self._raw_copy_parsed_data))
+            self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
         except Exception as e:
-            pass
+            self.log_message(str(e))
 
     def on_tabbed_content_tab_activated(self, msg):
         try:
