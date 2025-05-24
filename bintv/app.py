@@ -192,19 +192,7 @@ class BintvApp(App):
         self.set_focus(self.query_one("#file-chooser"))
         self.query_one("#construct-editor").language = "python"
         if self.target:
-            self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
-            self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))
-            self.query_one("#file-chooser").visible = False
-            with open(self.target, "rb") as f:
-                self.data = f.read()
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
-
-            self.pane_count += 1
-            self._parsed_data = self._construct.parse(self.data)
-            self.query_one("#construct-tree").parsed_data = self._parsed_data
-            self.on_hex_view_cursor_update(HexView.CursorUpdate(f"hex-pane-{self.pane_count}-hex-view", 0x0))
+            self.on_directory_tree_file_selected(DirectoryTree.FileSelected(None, self.target), inc_count=False)
 
     def on_text_area_changed(self, msg):
         try:
@@ -225,9 +213,10 @@ class BintvApp(App):
         except Exception as e:
             pass
 
-    def on_directory_tree_file_selected(self, msg):
-        self.pane_count += 1
-        self.query_one("#tabbed-content").add_pane(TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}"))
+    def on_directory_tree_file_selected(self, msg, inc_count=True):
+        if inc_count:
+            self.pane_count += 1
+            self.query_one("#tabbed-content").add_pane(TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))
         self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
