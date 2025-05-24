@@ -1,6 +1,6 @@
 # Binteractiview (or bintv) - Binary Format Visualization Tool
 
-<img src="imgs/icon.svg" alt="Binteractive Icon" width="64" height="64" align="right">
+<img src="imgs/icon.svg" alt="Binteractive Icon" width="128" height="128" align="center">
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python Version">
