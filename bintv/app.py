@@ -15,7 +15,7 @@ import re
 import json
 import construct
 from construct import *
-import construct.core as construct_core
+
 
 class AlignmentScreen(ModalScreen):
     BINDINGS = [("escape", "app.pop_screen", "Pop screen")]
