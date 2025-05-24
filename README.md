@@ -160,14 +160,23 @@ with open("visualization.svg", "w") as f:
 ## 🏗️ Architecture
 
 ```
-bintv/
-├── __main__.py          # Entry point
-├── app.py               # Main Textual application
-├── widgets/
-│   ├── hex_view.py      # Hex dump widget
-│   ├── reactive_construct_tree.py  # Structure tree widget
-│   └── log_panel.py     # Logging widget
-└── svg_exporter.py     # SVG generation
+.
+├── bintv
+│   ├── alignment.py
+│   ├── app.py
+│   ├── __init__.py
+│   ├── main.py
+│   ├── rawcopy_proxy.py
+│   ├── svg_exporter.py
+│   └── widgets
+│       ├── hex_view.py
+│       ├── __init__.py
+│       └── reactive_construct_tree.py
+├── imgs
+│   ├── binteratiview-tui.gif
+│   └── icon.svg
+├── README.md
+└── setup.py
 ```
 
 ## 🤝 Contributing
