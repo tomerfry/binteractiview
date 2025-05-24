@@ -93,8 +93,8 @@ class BintvApp(App):
 
     def action_export(self):
         if self._flattened_construct_data and self.data:
-            with open(f"binteractiview_{self.target}.svg", "w") as f:
-                f.write(create_svg(self._flattened_construct_data, self.data, title=f"{self.target} - Binteractiview"))
+            with open(f"binteractiview_{self.target.replace(".", "").replace("/", "")}.svg", "w") as f:
+                f.write(create_svg(self._flattened_construct_data, self.data, title=f"{self.target.split(".")[-2].replace("/", "")}"))
             self.log_message("Exported to SVG")
 
     def action_toggle_log(self):

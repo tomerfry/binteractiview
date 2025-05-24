@@ -40,7 +40,7 @@ The tool generates professional binary format documentation:
 
 <div align="center">
   <kbd>
-    <img src="imgs/example-visualization.svg" alt="Binary Format Visualization" width="600">
+    <img src="imgs/binteractiview_binteractiview-tuigif.svg" alt="Binary Format Visualization" width="600">
   </kbd>
 </div>
 
