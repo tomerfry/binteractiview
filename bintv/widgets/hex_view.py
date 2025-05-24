@@ -23,6 +23,7 @@ class HexView(ScrollView):
     buffer = {}
     data_addr = reactive(0)
     virtual_size = Size(60,1)
+    highlighted_field = reactive(None)
     
 
     BINDINGS = [
@@ -58,9 +59,6 @@ class HexView(ScrollView):
             if chr(b).isprintable():
                 txt = f"{chr(b)}"
                 
-            if offset+i in self.buffer:
-                styles.append(Style(color='red'))
-                
             segments.append(Segment(txt, Style.chain(*styles)))
 
         segments.append(Segment(" | "))
@@ -81,9 +79,6 @@ class HexView(ScrollView):
                 
                 if self.cursor_visible and cursor == offset+i+col_start:
                     styles.append(Style(bgcolor='white'))
-
-                if offset+i+col_start in self.buffer:
-                    styles.append(Style(color='red'))
 
                 segments.append(Segment(txt, Style.chain(*styles)))
                 segments.append(Segment(" "))

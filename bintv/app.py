@@ -1,3 +1,4 @@
+from bintv.svg_exporter import *
 from bintv.rawcopy_proxy import *
 from bintv.widgets.hex_view import *
 from bintv.widgets.reactive_construct_tree import *
@@ -78,7 +79,7 @@ class BintvApp(App):
         visibility: hidden;
     }
     '''
-    BINDINGS = [("ctrl+o", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+l", "toggle_log", "Toggle Log Panel"), ("ctrl+q", "quit", "Quit application")]
+    BINDINGS = [("ctrl+o", "load_binary", "Load binary file"), ("ctrl+t", "align", "Align multiple files"), ("ctrl+e", "export", "Export SVG from Content"), ("ctrl+l", "toggle_log", "Toggle Log Panel"), ("ctrl+q", "quit", "Quit application")]
 
     def action_load_binary(self):
         if not self.query_one("#file-chooser").visible:
@@ -89,6 +90,12 @@ class BintvApp(App):
 
     def action_align(self):
         self.push_screen(AlignmentScreen(targets=['a', 'b']))
+
+    def action_export(self):
+        if self._flattened_construct_data and self.data:
+            with open("out.svg", "w") as f:
+                f.write(create_svg(self._flattened_construct_data, self.data))
+            self.log_message("Exported to SVG")
 
     def action_toggle_log(self):
         if not self.query_one("#log-panel").visible:
@@ -244,5 +251,6 @@ class BintvApp(App):
             if end and name and start <= msg.offset and msg.offset < end:
                 the_name = name
         self.query_one(f"#{msg.id}-bottom-line").update(f"{hex(msg.offset)} - Currently on field {the_name}")
+        self.query_one(f"#{msg.id}").highlighted_field = (name, start, end)
 
 
