@@ -9,9 +9,6 @@ def eval_with_rawcopy(construct_string):
     # Create custom namespace
     namespace = {
         # Keep these unwrapped
-        'Cipher': Cipher,
-        'algorithms': algorithms,
-        'modes': modes,
         'Struct': Struct,
         'Sequence': Sequence,
         'Container': Container,
@@ -43,7 +40,6 @@ def eval_with_rawcopy(construct_string):
         'Float64l': RawCopy(Float64l),
         'Byte': RawCopy(Byte),
         'GreedyBytes': RawCopy(GreedyBytes),
-        'EncryptedSym': RawCopy(EncryptedSym),
         
         # Wrapped functions
         'Bytes': lambda n: RawCopy(Bytes(n)),
@@ -54,7 +50,7 @@ def eval_with_rawcopy(construct_string):
         'PaddedString': lambda length, encoding=None: RawCopy(PaddedString(length, encoding)),
         'Const': lambda value, subcon=None: RawCopy(Const(value, subcon)),
         'Computed': lambda func: RawCopy(Computed(func)),
-        'Rebuild': lambda subcon, func: RawCopy(Rebuild(subcon, func))
+        'Rebuild': lambda subcon, func: RawCopy(Rebuild(subcon, func)),
     }
     
     # Evaluate with custom namespace

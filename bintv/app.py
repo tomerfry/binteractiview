@@ -93,8 +93,8 @@ class BintvApp(App):
 
     def action_export(self):
         if self._flattened_construct_data and self.data:
-            with open("out.svg", "w") as f:
-                f.write(create_svg(self._flattened_construct_data, self.data))
+            with open(f"binteractiview_{self.target}.svg", "w") as f:
+                f.write(create_svg(self._flattened_construct_data, self.data, title=f"{self.target} - Binteractiview"))
             self.log_message("Exported to SVG")
 
     def action_toggle_log(self):
@@ -233,7 +233,7 @@ class BintvApp(App):
         self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
         self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
         self.set_focus(self.query_one(f"#hex-pane-{self.pane_count}-hex-view"))
-
+        self.target = msg.path
         with open(msg.path, "rb") as f:
             self.data = f.read()
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
@@ -244,6 +244,7 @@ class BintvApp(App):
 
     def on_hex_view_cursor_update(self, msg):
         the_name = "root"
+
         for item in self._flattened_construct_data:
             name = item["name"]
             start = item["start"]
