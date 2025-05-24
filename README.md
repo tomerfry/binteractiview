@@ -2,7 +2,10 @@
 
 <div align="center">
     <img src="imgs/icon.svg" alt="Binteractive Icon" width="128" height="128" align="center">
+    <
 </div>
+
+
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python Version">
