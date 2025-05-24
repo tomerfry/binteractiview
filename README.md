@@ -80,7 +80,7 @@ rich
 bintv
 
 # Open with a specific file
-bintv path/to/binary/file.bin
+bintv -t path/to/binary/file.bin
 ```
 
 ### Keyboard Shortcuts
