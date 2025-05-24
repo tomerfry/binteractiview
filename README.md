@@ -1,4 +1,4 @@
-# Binteractiview (or bintv) - Binary Format Visualization Tool
+# Binteractiview - Binary Format Visualization Tool
 
 <div align="center">
     <img src="imgs/icon.svg" alt="Binteractive Icon" width="128" height="128" align="center">
