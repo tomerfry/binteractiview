@@ -2,6 +2,7 @@ from bintv.svg_exporter import *
 from bintv.rawcopy_proxy import *
 from bintv.widgets.hex_view import *
 from bintv.widgets.reactive_construct_tree import *
+from bintv.neon_pallete import *
 
 from textual.app import App
 from textual.geometry import Size 
@@ -144,7 +145,6 @@ class BintvApp(App):
         yield Log(id="log-panel", auto_scroll=True, highlight=True)
         yield DirectoryTree("./", id="file-chooser") 
 
-
     def flatten_construct_offsets(self, parent_prefix=""):
         result = []
         def process_item(name, value, parent_prefix=""):
@@ -193,6 +193,7 @@ class BintvApp(App):
         self.query_one("#construct-editor").language = "python"
         if self.target:
             self.on_directory_tree_file_selected(DirectoryTree.FileSelected(None, self.target), inc_count=False)
+        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor").text))
 
     def on_text_area_changed(self, msg):
         try:
@@ -202,6 +203,7 @@ class BintvApp(App):
             self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
             self._flattened_construct_data = self.flatten_construct_offsets()
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_colors(len(self._flattened_construct_data)))
             self.log_message(self._flattened_construct_data)
         except Exception as e:
             self.log_message(str(e))

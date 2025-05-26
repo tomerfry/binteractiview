@@ -25,6 +25,7 @@ class HexView(ScrollView):
     data_addr = reactive(0)
     virtual_size = Size(60,1)
     highlighted_field = reactive(None)
+    elements = reactive(None)
     
     BINDINGS = [
         Binding("up", "cursor_up", "Cursor Up", show=False),
@@ -77,6 +78,14 @@ class HexView(ScrollView):
                 if b != 0:
                     txt = f"{b:02x}"
    
+                if self.elements:
+                    chunks,colors = self.elements
+                    for idx, chunk in enumerate(chunks):
+                        if "start" in chunk and isinstance(chunk["start"], int):
+                            if chunk["start"] <= i+offset+col_start < chunk["end"]:
+                                styles.append(Style(bgcolor=colors[idx]))
+
+
                 if self.cursor_visible and cursor == offset+i+col_start:
                     styles.append(Style(bgcolor='white'))
 
