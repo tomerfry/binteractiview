@@ -61,8 +61,6 @@ class HexView(ScrollView):
                         if chunk["start"] <= i+offset < chunk["end"]:
                             styles.append(Style(bgcolor=colors[idx]))
 
-
-
             if self.cursor_visible and cursor == offset+i:
                 styles.append(Style(bgcolor='white'))
 
@@ -71,14 +69,19 @@ class HexView(ScrollView):
 
             segments.append(Segment(txt, Style.chain(*styles)))
 
+        if len(line_data) % 0x10 != 0:
+            segments.append(Segment(" "*(0x10 - (len(line_data) % 0x10))))
+
         segments.append(Segment(" | "))
         return segments
 
     def generate_hex_segments(self, offset, line_data):
         cursor = self.get_byte_cursor()
         segments = []
+        sum_of_chunks_szs = 0
         for col_start in range(0, 16, 8):
             chunk = self.data[offset+col_start:offset+col_start+8]
+            sum_of_chunks_szs += len(chunk)
             if not chunk:
                 break
             for i,b in enumerate(chunk):
@@ -103,6 +106,9 @@ class HexView(ScrollView):
 
                 segments.append(Segment(txt, Style.chain(*styles)))
                 segments.append(space)
+
+        if sum_of_chunks_szs % 0x10 != 0x0:
+            segments.append(Segment("   "*(0x10-(sum_of_chunks_szs%0x10))))
 
         return segments
 
