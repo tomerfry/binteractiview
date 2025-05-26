@@ -29,6 +29,16 @@ Binteractiview is a terminal-based binary file viewer and analyzer that combines
 ### Main Interface
 The main interface shows the construct editor on the left, hex view in the center, and structure tree on the right:
 
+#### Demo #0
+
+<div align="center">
+  <kbd>
+    <img src="imgs/binteratiview-tui.gif" alt="Binteratiview TUI" width="600">
+  </kbd>
+</div>
+
+#### Demo #1
+
 <div align="center">
   <kbd>
     <img src="imgs/binteratiview-tui.gif" alt="Binteratiview TUI" width="600">
