@@ -33,7 +33,7 @@ The main interface shows the construct editor on the left, hex view in the cente
 
 <div align="center">
   <kbd>
-    <img src="imgs/binteratiview-tui.gif" alt="Binteratiview TUI" width="600">
+    <img src="imgs/binteratiview_dynamic_demo.gif" alt="Binteratiview TUI" width="600">
   </kbd>
 </div>
 
