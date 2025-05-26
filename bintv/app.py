@@ -219,14 +219,15 @@ class BintvApp(App):
             self.query_one("#tabbed-content").add_pane(TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(HexView(id=f"hex-pane-{self.pane_count}-hex-view"))
         self.query_one(f"#hex-pane-{self.pane_count}").mount(Static(hex(0x0), id=f"hex-pane-{self.pane_count}-hex-view-bottom-line"))
-        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
-        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
         self.set_focus(self.query_one(f"#hex-pane-{self.pane_count}-hex-view"))
         self.target = msg.path
         with open(msg.path, "rb") as f:
             self.data = f.read()
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
    
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
+
         self.query_one("#file-chooser").visible = False
         self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
         self.on_hex_view_cursor_update(HexView.CursorUpdate(f"hex-pane-{self.pane_count}-hex-view", 0x0))

@@ -8,6 +8,7 @@ from textual.geometry import Size
 from textual.message import Message
 from textual.reactive import reactive
 from textual.scroll_view import ScrollView
+from textual.color import Color
 from rich.text import Text
 from rich.style import Style
 from rich.jupyter import JupyterMixin
@@ -25,7 +26,6 @@ class HexView(ScrollView):
     virtual_size = Size(60,1)
     highlighted_field = reactive(None)
     
-
     BINDINGS = [
         Binding("up", "cursor_up", "Cursor Up", show=False),
         Binding("k", "cursor_up", "Cursor Up", show=False),
@@ -76,7 +76,7 @@ class HexView(ScrollView):
                 styles = [Style(color='green')]
                 if b != 0:
                     txt = f"{b:02x}"
-                
+   
                 if self.cursor_visible and cursor == offset+i+col_start:
                     styles.append(Style(bgcolor='white'))
 
