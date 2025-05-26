@@ -53,13 +53,22 @@ class HexView(ScrollView):
         for i,b in enumerate(line_data):
             txt = "."
             styles = [Style(color='green')]
-            
+
+            if self.elements:
+                chunks,colors = self.elements
+                for idx, chunk in enumerate(chunks):
+                    if "start" in chunk and isinstance(chunk["start"], int):
+                        if chunk["start"] <= i+offset < chunk["end"]:
+                            styles.append(Style(bgcolor=colors[idx]))
+
+
+
             if self.cursor_visible and cursor == offset+i:
                 styles.append(Style(bgcolor='white'))
 
             if chr(b).isprintable():
                 txt = f"{chr(b)}"
-                
+
             segments.append(Segment(txt, Style.chain(*styles)))
 
         segments.append(Segment(" | "))
@@ -73,6 +82,7 @@ class HexView(ScrollView):
             if not chunk:
                 break
             for i,b in enumerate(chunk):
+                space = Segment(" ")
                 txt = '00'
                 styles = [Style(color='green')]
                 if b != 0:
@@ -84,13 +94,15 @@ class HexView(ScrollView):
                         if "start" in chunk and isinstance(chunk["start"], int):
                             if chunk["start"] <= i+offset+col_start < chunk["end"]:
                                 styles.append(Style(bgcolor=colors[idx]))
+                                if i+offset+col_start+1 != chunk["end"] and (i+offset+col_start+1) % 0x10 != 0:
+                                    space = Segment(" ", Style(bgcolor=colors[idx]))
 
 
                 if self.cursor_visible and cursor == offset+i+col_start:
                     styles.append(Style(bgcolor='white'))
 
                 segments.append(Segment(txt, Style.chain(*styles)))
-                segments.append(Segment(" "))
+                segments.append(space)
 
         return segments
 
