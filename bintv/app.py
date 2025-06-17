@@ -9,7 +9,7 @@ from textual.geometry import Size
 from textual.containers import Grid
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane, Log
+from textual.widgets import Placeholder, DirectoryTree, TextArea, TabbedContent, TabPane, Log, Static
 
 import io
 import re
@@ -228,7 +228,9 @@ class BintvApp(App):
             self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = bytearray(self.data)
    
         self.query_one(f"#hex-pane-{self.pane_count}-hex-view").virtual_size = Size(60, len(self.data) // 60)
-        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
+        # self.query_one(f"#hex-pane-{self.pane_count}-hex-view").scrollable_size = Size(60, len(self.data) // 60)
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").width = 60
+        self.query_one(f"#hex-pane-{self.pane_count}-hex-view").height = len(self.data) // 60
 
         self.query_one("#file-chooser").visible = False
         self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))

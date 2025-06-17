@@ -1,7 +1,6 @@
 import string
 from textual import work
 from textual.app import *
-from textual.widgets import *
 from textual.strip import Strip
 from textual.containers import *
 from textual.geometry import Size
