@@ -15,7 +15,7 @@ from rich.jupyter import JupyterMixin
 from rich.segment import Segment, Segments
 
 
-class HexView(ScrollView):
+class HexView(ScrollView, can_focus=True):
     nibble_cursor = reactive(0)
     cursor_visible = reactive(True)
     data = reactive(bytearray(b''))
@@ -26,6 +26,9 @@ class HexView(ScrollView):
     virtual_size = Size(60,1)
     highlighted_field = reactive(None)
     elements = reactive(None)
+    # NEW: Mouse hover tracking
+    mouse_hover_offset = reactive(None)
+    show_tooltip = reactive(False)
     
     BINDINGS = [
         Binding("up", "cursor_up", "Cursor Up", show=False),
@@ -53,37 +56,81 @@ class HexView(ScrollView):
         return self.nibble_cursor >> 1
 
     # NEW: Mouse interaction methods
-    def on_click(self, event):
-        """Handle mouse clicks"""
+    def get_field_info_at_position(self, offset):
+        """Get field information for the given byte offset"""
+        if not self.elements or offset >= len(self.data):
+            return None
+            
+        chunks, colors = self.elements
+        for idx, chunk in enumerate(chunks):
+            if "start" in chunk and isinstance(chunk["start"], int):
+                if chunk["start"] <= offset < chunk["end"]:
+                    field_name = chunk.get("name", f"Field {idx}")
+                    field_type = chunk.get("type", "unknown")
+                    size = chunk["end"] - chunk["start"]
+                    rel_offset = offset - chunk["start"]
+                    return {
+                        "name": field_name,
+                        "type": field_type,
+                        "size": size,
+                        "start": chunk["start"],
+                        "end": chunk["end"],
+                        "relative_offset": rel_offset,
+                        "absolute_offset": offset
+                    }
+        return None
+
+    def get_mouse_offset(self, x, y):
+        """Get the byte offset for mouse coordinates"""
         scroll_x, scroll_y = self.scroll_offset
-        actual_y = event.y + scroll_y
+        actual_y = y + scroll_y
         
         # Calculate which row was clicked
         if actual_y >= (len(self.data) // 16) + 1:
-            return
+            return None
             
         row_offset = actual_y * 16
         
         # Simple approach: assume hex region starts at column 3 and ASCII at column 52
-        if 3 <= event.x <= 50:  # Hex region (approximate)
+        if 3 <= x <= 50:  # Hex region (approximate)
             # Click in hex region - rough calculation
-            relative_x = event.x - 3
+            relative_x = x - 3
             byte_index = min(relative_x // 3, 15)  # Each byte takes ~3 chars
             cursor_pos = row_offset + byte_index
             
-        elif 52 <= event.x <= 68:  # ASCII region (approximate)
+        elif 52 <= x <= 68:  # ASCII region (approximate)
             # Click in ASCII region
-            relative_x = event.x - 52
+            relative_x = x - 52
             byte_index = min(relative_x, 15)
             cursor_pos = row_offset + byte_index
         else:
-            return
+            return None
             
         # Ensure cursor position is within data bounds
         if cursor_pos < len(self.data):
-            self.nibble_cursor = (cursor_pos << 1) & ~1
+            return cursor_pos
+        return None
+
+    def on_mouse_move(self, event):
+        """Handle mouse movement for tooltip"""
+        offset = self.get_mouse_offset(event.x, event.y)
+        if offset is not None:
+            self.mouse_hover_offset = offset
+            self.show_tooltip = True
+        else:
+            self.show_tooltip = False
+
+    def on_leave(self, event):
+        """Hide tooltip when mouse leaves the widget"""
+        self.show_tooltip = False
+
+    def on_click(self, event):
+        """Handle mouse clicks"""
+        offset = self.get_mouse_offset(event.x, event.y)
+        if offset is not None:
+            self.nibble_cursor = (offset << 1) & ~1
             self.cursor_visible = True
-            self.post_message(self.CursorUpdate(self.id, cursor_pos))
+            self.post_message(self.CursorUpdate(self.id, offset))
 
     def generate_ascii_segments(self, offset, line_data):
         cursor = self.get_byte_cursor()
@@ -177,6 +224,31 @@ class HexView(ScrollView):
         if y < (len(self.data) // 16)+1:
             return Strip(self.generate_line(y*16, self.data[y*16:(y+1)*16]))
         return Strip.blank(20, self.rich_style)
+
+    async def watch_mouse_hover_offset(self, old_offset, new_offset):
+        """Update tooltip when hover offset changes"""
+        if new_offset is not None and self.show_tooltip:
+            field_info = self.get_field_info_at_position(new_offset)
+            if field_info:
+                tooltip_text = (
+                    f"Field: {field_info['name']}\n"
+                    f"Type: {field_info['type']}\n" 
+                    f"Offset: 0x{field_info['absolute_offset']:04x} ({field_info['absolute_offset']})\n"
+                    f"Size: {field_info['size']} bytes\n"
+                    f"Range: 0x{field_info['start']:04x}-0x{field_info['end']-1:04x}"
+                )
+                self.tooltip = tooltip_text
+            else:
+                # Show basic info even without field structure
+                byte_value = self.data[new_offset] if new_offset < len(self.data) else 0
+                tooltip_text = (
+                    f"Offset: 0x{new_offset:04x} ({new_offset})\n"
+                    f"Value: 0x{byte_value:02x} ({byte_value})\n"
+                    f"ASCII: {'.' if not chr(byte_value).isprintable() else chr(byte_value)}"
+                )
+                self.tooltip = tooltip_text
+        else:
+            self.tooltip = None
 
     def set_value_at_cursor(self, hex_char):
         """Placeholder for hex editing functionality"""
