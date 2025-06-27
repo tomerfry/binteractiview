@@ -1,4 +1,5 @@
 import string
+import asyncio
 from textual import work
 from textual.app import *
 from textual.strip import Strip
@@ -34,7 +35,12 @@ class HexView(ScrollView):
         Binding("left", "cursor_left", "Cursor Left", show=False),
         Binding("h", "cursor_left", "Cursor Left", show=False),
         Binding("right", "cursor_right", "Cursor Right", show=False),
-        Binding("l", "cursor_right", "Cursor Right", show=False)
+        Binding("l", "cursor_right", "Cursor Right", show=False),
+        # NEW: Add go-to-end bindings
+        Binding("end", "goto_end", "Go to End", show=False),
+        Binding("ctrl+end", "goto_end", "Go to End", show=False),
+        Binding("home", "goto_start", "Go to Start", show=False),
+        Binding("ctrl+home", "goto_start", "Go to Start", show=False)
     ]
 
     class CursorUpdate(Message):
@@ -45,6 +51,39 @@ class HexView(ScrollView):
 
     def get_byte_cursor(self):
         return self.nibble_cursor >> 1
+
+    # NEW: Mouse interaction methods
+    def on_click(self, event):
+        """Handle mouse clicks"""
+        scroll_x, scroll_y = self.scroll_offset
+        actual_y = event.y + scroll_y
+        
+        # Calculate which row was clicked
+        if actual_y >= (len(self.data) // 16) + 1:
+            return
+            
+        row_offset = actual_y * 16
+        
+        # Simple approach: assume hex region starts at column 3 and ASCII at column 52
+        if 3 <= event.x <= 50:  # Hex region (approximate)
+            # Click in hex region - rough calculation
+            relative_x = event.x - 3
+            byte_index = min(relative_x // 3, 15)  # Each byte takes ~3 chars
+            cursor_pos = row_offset + byte_index
+            
+        elif 52 <= event.x <= 68:  # ASCII region (approximate)
+            # Click in ASCII region
+            relative_x = event.x - 52
+            byte_index = min(relative_x, 15)
+            cursor_pos = row_offset + byte_index
+        else:
+            return
+            
+        # Ensure cursor position is within data bounds
+        if cursor_pos < len(self.data):
+            self.nibble_cursor = (cursor_pos << 1) & ~1
+            self.cursor_visible = True
+            self.post_message(self.CursorUpdate(self.id, cursor_pos))
 
     def generate_ascii_segments(self, offset, line_data):
         cursor = self.get_byte_cursor()
@@ -139,6 +178,11 @@ class HexView(ScrollView):
             return Strip(self.generate_line(y*16, self.data[y*16:(y+1)*16]))
         return Strip.blank(20, self.rich_style)
 
+    def set_value_at_cursor(self, hex_char):
+        """Placeholder for hex editing functionality"""
+        # You'll need to implement this based on your editing requirements
+        pass
+
     def on_key(self, event):
         self.cursor_visible = True
         if event.key == 'insert':
@@ -192,3 +236,31 @@ class HexView(ScrollView):
             self.nibble_cursor = next_nibble_cursor
         self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
+    # NEW: Go to end functionality
+    def action_goto_end(self):
+        """Move cursor to the last byte of data"""
+        if len(self.data) > 0:
+            last_byte_pos = len(self.data) - 1
+            self.nibble_cursor = (last_byte_pos << 1) & ~1
+            self.cursor_visible = True
+            
+            # Calculate the row of the last byte
+            cursor_y = last_byte_pos // 16
+            # Scroll to show the cursor, ensuring we don't go beyond the content
+            # Position the cursor near the bottom of the view but still visible
+            target_y = max(0, cursor_y - max(0, self.size.height - 3))
+            self.scroll_to(y=target_y, animate=True)
+            
+            self.post_message(self.CursorUpdate(self.id, last_byte_pos))
+
+    # NEW: Go to start functionality  
+    def action_goto_start(self):
+        """Move cursor to the first byte of data"""
+        if len(self.data) > 0:
+            self.nibble_cursor = 0
+            self.cursor_visible = True
+            
+            # Scroll to the top
+            self.scroll_to(y=0, animate=True)
+            
+            self.post_message(self.CursorUpdate(self.id, 0))
