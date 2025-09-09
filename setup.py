@@ -14,6 +14,8 @@ AUTHOR = "Tomer Goldschmidt"
 # Required packages
 REQUIRED = [
     "textual",
+    "tree-sitter",
+    "tree-sitter-python",
     "construct",
     "numpy",
     "bio"

@@ -1,5 +1,4 @@
 from bintv.svg_exporter import *
-from bintv.rawcopy_proxy import *
 from bintv.widgets.hex_view import *
 from bintv.widgets.reactive_construct_tree import *
 from bintv.neon_pallete import *
@@ -16,6 +15,12 @@ import re
 import json
 import construct
 from construct import *
+import tree_sitter_python as tspython
+from tree_sitter import Language, Parser, Query, QueryCursor
+
+PY_LANGUAGE = Language(tspython.language())
+
+RAWCOPY_MAPPER_QUERY = b'(_ [(identifier)] @caps)'
 
 
 class AlignmentScreen(ModalScreen):
@@ -132,7 +137,7 @@ class BintvApp(App):
         self.target = target
         self.offset = 0
         self.pane_count = 0
-    
+
     def compose(self):
         with Horizontal():
             with Vertical():
@@ -193,12 +198,39 @@ class BintvApp(App):
         self.query_one("#construct-editor").language = "python"
         if self.target:
             self.on_directory_tree_file_selected(DirectoryTree.FileSelected(None, self.target), inc_count=False)
-        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor").text))
+        self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
+
+    def eval_with_ts(self, text):
+        text_bytes = bytes(text, 'utf-8')
+        tree = Parser(PY_LANGUAGE).parse(text_bytes)
+        qc = QueryCursor(Query(PY_LANGUAGE, RAWCOPY_MAPPER_QUERY))
+        caps = qc.captures(tree.root_node)['caps']
+
+        new_pattern = b''
+        offset = 0
+        nesting = 0
+
+        for cap in caps:
+            new_pattern += text_bytes[offset:cap.start_byte]
+            new_pattern += b'RawCopy('
+            new_pattern += text_bytes[cap.start_byte:cap.end_byte]
+            if text_bytes[cap.end_byte+1] == b'(':
+                nesting += 1
+            else:
+                text_bytes += b')'
+            offset = cap.end_byte
+        new_pattern += text_bytes[cap.end_byte:] + ((b')')*nesting)
+ 
+        with open("/tmp/asdf.txt", 'w') as f:
+            f.write(f'{new_pattern}\n')
+            f.write(f'{str(caps)}\n')
+ 
+        return eval(new_pattern)
 
     def on_text_area_changed(self, msg):
         try:
             self._subcons_text = msg.text_area.text
-            self._construct = eval_with_rawcopy(self._subcons_text)
+            self._construct = self.eval_with_ts(self._subcons_text)
             self._parsed_data = self._construct.parse(self.data)
             self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
