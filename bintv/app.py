@@ -221,10 +221,6 @@ class BintvApp(App):
             offset = cap.end_byte
         new_pattern += text_bytes[cap.end_byte:] + ((b')')*nesting)
  
-        with open("/tmp/asdf.txt", 'w') as f:
-            f.write(f'{new_pattern}\n')
-            f.write(f'{str(caps)}\n')
- 
         return eval(new_pattern)
 
     def on_text_area_changed(self, msg):
