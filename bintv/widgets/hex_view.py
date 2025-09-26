@@ -26,7 +26,6 @@ class HexView(ScrollView, can_focus=True):
     virtual_size = Size(60,1)
     highlighted_field = reactive(None)
     elements = reactive(None)
-    # NEW: Mouse hover tracking
     mouse_hover_offset = reactive(None)
     show_tooltip = reactive(False)
     
@@ -39,7 +38,6 @@ class HexView(ScrollView, can_focus=True):
         Binding("h", "cursor_left", "Cursor Left", show=False),
         Binding("right", "cursor_right", "Cursor Right", show=False),
         Binding("l", "cursor_right", "Cursor Right", show=False),
-        # NEW: Add go-to-end bindings
         Binding("end", "goto_end", "Go to End", show=False),
         Binding("ctrl+end", "goto_end", "Go to End", show=False),
         Binding("home", "goto_start", "Go to Start", show=False),
@@ -55,7 +53,6 @@ class HexView(ScrollView, can_focus=True):
     def get_byte_cursor(self):
         return self.nibble_cursor >> 1
 
-    # NEW: Mouse interaction methods
     def get_field_info_at_position(self, offset):
         """Get field information for the given byte offset"""
         if not self.elements or offset >= len(self.data):
@@ -92,15 +89,15 @@ class HexView(ScrollView, can_focus=True):
         row_offset = actual_y * 16
         
         # Simple approach: assume hex region starts at column 3 and ASCII at column 52
-        if 3 <= x <= 50:  # Hex region (approximate)
+        if 1 <= x <= 50:  # Hex region (approximate)
             # Click in hex region - rough calculation
-            relative_x = x - 3
+            relative_x = x - 1
             byte_index = min(relative_x // 3, 15)  # Each byte takes ~3 chars
             cursor_pos = row_offset + byte_index
             
-        elif 52 <= x <= 68:  # ASCII region (approximate)
+        elif 50 <= x <= 68:  # ASCII region (approximate)
             # Click in ASCII region
-            relative_x = x - 52
+            relative_x = x - 50
             byte_index = min(relative_x, 15)
             cursor_pos = row_offset + byte_index
         else:
@@ -134,7 +131,7 @@ class HexView(ScrollView, can_focus=True):
 
     def generate_ascii_segments(self, offset, line_data):
         cursor = self.get_byte_cursor()
-        segments = [Segment("| ")]
+        segments = [Segment(" ")]
         for i,b in enumerate(line_data):
             txt = "."
             styles = [Style(color='green')]
@@ -157,7 +154,6 @@ class HexView(ScrollView, can_focus=True):
         if len(line_data) % 0x10 != 0:
             segments.append(Segment(" "*(0x10 - (len(line_data) % 0x10))))
 
-        segments.append(Segment(" | "))
         return segments
 
     def generate_hex_segments(self, offset, line_data):
@@ -170,7 +166,7 @@ class HexView(ScrollView, can_focus=True):
             if not chunk:
                 break
             for i,b in enumerate(chunk):
-                space = Segment(" ")
+                space = Segment("  ")
                 txt = '00'
                 styles = [Style(color='green')]
                 if b != 0:
@@ -183,15 +179,15 @@ class HexView(ScrollView, can_focus=True):
                             if chunk["start"] <= i+offset+col_start < chunk["end"]:
                                 styles.append(Style(bgcolor=colors[idx]))
                                 if i+offset+col_start+1 != chunk["end"] and (i+offset+col_start+1) % 0x10 != 0:
-                                    space = Segment(" ", Style(bgcolor=colors[idx]))
+                                    space = Segment("  ", Style(bgcolor=colors[idx]))
 
 
                 if self.cursor_visible and cursor == offset+i+col_start:
                     styles.append(Style(bgcolor='white'))
 
+                segments.append(Segment(" ", Style(color='green')))
                 segments.append(Segment(txt, Style.chain(*styles)))
-                segments.append(space)
-
+        segments.append(Segment(" ", Style(color='green')))
         if sum_of_chunks_szs % 0x10 != 0x0:
             segments.append(Segment("   "*(0x10-(sum_of_chunks_szs%0x10))))
 
@@ -199,7 +195,7 @@ class HexView(ScrollView, can_focus=True):
 
     def generate_line(self, offset, line_data):
         segments = []
-        segments.append(Segment(' | '))
+        segments.append(Segment(' '))
         segments.extend(self.generate_hex_segments(offset, line_data))
         segments.extend(self.generate_ascii_segments(offset, line_data))
         return segments
@@ -308,7 +304,6 @@ class HexView(ScrollView, can_focus=True):
             self.nibble_cursor = next_nibble_cursor
         self.post_message(self.CursorUpdate(self.id, self.nibble_cursor >> 1))
 
-    # NEW: Go to end functionality
     def action_goto_end(self):
         """Move cursor to the last byte of data"""
         if len(self.data) > 0:
@@ -325,7 +320,6 @@ class HexView(ScrollView, can_focus=True):
             
             self.post_message(self.CursorUpdate(self.id, last_byte_pos))
 
-    # NEW: Go to start functionality  
     def action_goto_start(self):
         """Move cursor to the first byte of data"""
         if len(self.data) > 0:

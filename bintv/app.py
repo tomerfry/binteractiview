@@ -205,22 +205,21 @@ class BintvApp(App):
         tree = Parser(PY_LANGUAGE).parse(text_bytes)
         qc = QueryCursor(Query(PY_LANGUAGE, RAWCOPY_MAPPER_QUERY))
         caps = qc.captures(tree.root_node)['caps']
+        self.log_message(caps)
 
-        new_pattern = b''
+        new_pattern = bytearray(text_bytes[:])
         offset = 0
-        nesting = 0
 
         for cap in caps:
-            new_pattern += text_bytes[offset:cap.start_byte]
-            new_pattern += b'RawCopy('
-            new_pattern += text_bytes[cap.start_byte:cap.end_byte]
-            if text_bytes[cap.end_byte+1] == b'(':
-                nesting += 1
-            else:
-                text_bytes += b')'
+            new_pattern[cap.start_byte:cap.end_byte] = b'RawCopy(' + cap.text
             offset = cap.end_byte
-        new_pattern += text_bytes[cap.end_byte:] + ((b')')*nesting)
- 
+
+        for i,c in enumerate(reversed(new_pattern)):
+            if c == ')':
+                new_pattern.insert(i, ')')
+                
+        with open('/tmp/asdf.txt', 'wb') as f:
+            f.write(bytes(new_pattern))
         return eval(new_pattern)
 
     def on_text_area_changed(self, msg):
@@ -231,7 +230,7 @@ class BintvApp(App):
             self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
             self._flattened_construct_data = self.flatten_construct_offsets()
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_colors(len(self._flattened_construct_data)))
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_color(len(self._flattened_construct_data)))
             self.log_message(self._flattened_construct_data)
         except Exception as e:
             self.log_message(str(e))
