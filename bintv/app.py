@@ -211,8 +211,7 @@ class BintvApp(App):
         offset = 0
 
         for cap in caps:
-            new_pattern[cap.start_byte:cap.end_byte] = b'RawCopy(' + cap.text
-            offset = cap.end_byte
+            new_pattern.replace(cap.text, b'RawCopy(' + cap.text)
 
         for i,c in enumerate(reversed(new_pattern)):
             if c == ')':
