@@ -20,7 +20,7 @@ from tree_sitter import Language, Parser, Query, QueryCursor
 
 PY_LANGUAGE = Language(tspython.language())
 
-RAWCOPY_MAPPER_QUERY = b'(_ [(identifier)] @caps)'
+RAWCOPY_MAPPER_QUERY = b'(binary_operator operator: "/" (_) @primitives)'
 
 
 class AlignmentScreen(ModalScreen):
@@ -204,21 +204,12 @@ class BintvApp(App):
         text_bytes = bytes(text, 'utf-8')
         tree = Parser(PY_LANGUAGE).parse(text_bytes)
         qc = QueryCursor(Query(PY_LANGUAGE, RAWCOPY_MAPPER_QUERY))
-        caps = qc.captures(tree.root_node)['caps']
+        caps = set([cap.text for cap in qc.captures(tree.root_node)['primitives']])
         self.log_message(caps)
 
-        new_pattern = bytearray(text_bytes[:])
-        offset = 0
-
+        new_pattern = b'RawCopy(' + text_bytes[:] + b')'
         for cap in caps:
-            new_pattern.replace(cap.text, b'RawCopy(' + cap.text)
-
-        for i,c in enumerate(reversed(new_pattern)):
-            if c == ')':
-                new_pattern.insert(i, ')')
-                
-        with open('/tmp/asdf.txt', 'wb') as f:
-            f.write(bytes(new_pattern))
+            new_pattern = new_pattern.replace(cap, b'RawCopy(' + cap + b')')
         return eval(new_pattern)
 
     def on_text_area_changed(self, msg):
@@ -226,10 +217,9 @@ class BintvApp(App):
             self._subcons_text = msg.text_area.text
             self._construct = self.eval_with_ts(self._subcons_text)
             self._parsed_data = self._construct.parse(self.data)
-            self.log_message(self._parsed_data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
             self._flattened_construct_data = self.flatten_construct_offsets()
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_color(len(self._flattened_construct_data)))
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_colors(len(self._flattened_construct_data)))
             self.log_message(self._flattened_construct_data)
         except Exception as e:
             self.log_message(str(e))
