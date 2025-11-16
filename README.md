@@ -1,217 +1,104 @@
-## Binteractiview - Binary Format Visualization Tool
+# Binteractiview Enhanced - Feature Addition
 
-<div align="center">
-    <img src="imgs/icon.svg" alt="Binteractive Icon" width="128" height="128" align="center">
-</div>
+## New Features Added
 
-<p></p>
+✅ **Right-click context menu** on parsed value tree fields  
+✅ **Edit field values** with type-aware validation  
+✅ **Save-on-exit confirmation** with automatic save to `/tmp/`  
+✅ **Go to offset** from tree fields  
+✅ **Change tracking** for modified fields  
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python Version">
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/Framework-Textual-purple.svg" alt="Framework">
-</p>
+## Quick Installation
 
-Binteractiview is a terminal-based binary file viewer and analyzer that combines hex editing capabilities with dynamic structure parsing using Python's `construct` library. It provides real-time visualization of binary data structures with beautiful SVG exports.
+1. **Backup your files:**
+   ```bash
+   cd /path/to/binteractiview
+   cp bintv/app.py bintv/app.py.backup
+   cp bintv/widgets/reactive_construct_tree.py bintv/widgets/reactive_construct_tree.py.backup
+   ```
 
-## ✨ Features
+2. **Replace with enhanced versions:**
+   ```bash
+   # Replace reactive_construct_tree.py
+   cp reactive_construct_tree.py bintv/widgets/reactive_construct_tree.py
+   
+   # Replace app.py
+   cp app.py bintv/app.py
+   ```
 
-- **Interactive Hex Viewer**: Navigate and inspect binary files with a responsive hex dump interface
-- **Dynamic Structure Parsing**: Define and apply binary structures using `construct` syntax in real-time
-- **Multi-File Support**: Work with multiple binary files simultaneously using tabs
-- **Offset Tracking**: Automatic offset calculation and display for all parsed fields
-- **SVG Visualization**: Export beautiful, dark-themed visualizations of your binary structures
-- **Log Panel**: Built-in logging system (toggle with `Ctrl+L`)
-- **File Browser**: Integrated file tree for easy file selection
+3. **Done!** No additional dependencies needed.
 
-## 📸 Screenshots
+## Usage
 
-### Main Interface
-The main interface shows the construct editor on the left, hex view in the center, and structure tree on the right:
+### Edit a Field Value:
+1. Right-click on any field in the parsed values tree (right panel)
+2. Select "✏️  Edit Value" from the context menu
+3. Enter new value (supports decimal, hex, bytes, strings, floats, bools)
+4. Click "Save"
 
-<div align="center">
-  <kbd>
-    <img src="imgs/binteractiview-tui.gif" alt="Binteratiview TUI" width="600">
-  </kbd>
-</div>
+### Input Formats:
+- **Integers**: `255` or `0xFF`
+- **Bytes**: `DEADBEEF` or `DE AD BE EF`
+- **Strings**: Plain text
+- **Floats**: `3.14159`
+- **Booleans**: `true`/`false` or `1`/`0`
 
+### Saving Changes:
+When you exit (Ctrl+Q), if there are unsaved changes:
+- **Save & Exit**: Saves to `/tmp/{filename}_modified{ext}`
+- **Exit Without Saving**: Discards all changes
+- **Cancel**: Returns to app
 
-### Supports Dynamic Back-Referencing 
+### Additional Features:
+- **Go to Offset**: Right-click field → "📍 Go to Offset" (jumps hex view)
+- **View Changes**: Check log panel (Ctrl+L) for modification history
 
-<div align="center">
-  <kbd>
-    <img src="imgs/binteractiview_dynamic_demo.gif" alt="Binteratiview TUI" width="600">
-  </kbd>
-</div>
+## What Changed
 
-### SVG Export
-The tool generates professional binary format documentation:
+### Files Modified:
 
-<div align="center">
-  <kbd>
-    <img src="imgs/bintv_gif_construct.svg" alt="Binary Format Visualization" width="600">
-  </kbd>
-</div>
+1. **`bintv/widgets/reactive_construct_tree.py`**
+   - Added `EditValueScreen` class (modal for editing)
+   - Added `ContextMenu` class (right-click menu)
+   - Added `FieldEditRequest` and `GotoOffsetRequest` messages
+   - Added `on_tree_node_right_clicked()` handler
 
-## 🚀 Installation
+2. **`bintv/app.py`**
+   - Added `ConfirmExitScreen` class (exit confirmation)
+   - Added `has_unsaved_changes` flag
+   - Added `modified_fields` tracking
+   - Added `save_modified_file()` method
+   - Added handlers for edit requests
+   - Modified `action_quit()` to show confirmation
 
-### Prerequisites
-- Python 3.8 or higher
-- pip package manager
+## Key Capabilities
 
-### Install from source
+✨ **Type-Aware Editing**: Automatically validates input based on field type  
+✨ **Offset Tracking**: Finds exact byte location from RawCopy wrappers  
+✨ **Real-time Updates**: Changes immediately reflected in hex view  
+✨ **Safe Exit**: Always prompts before losing unsaved work  
+✨ **Change Log**: All modifications logged with offsets  
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/bintv.git
-cd bintv
-
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install .
-```
-
-### Dependencies
-
-```txt
-textual
-construct
-rich
-```
-
-## 📖 Usage
-
-### Basic Usage
-
-```bash
-# Launch BinTV
-bintv
-
-# Open with a specific file
-bintv -t path/to/binary/file.bin
-```
-
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+O` | Open file browser |
-| `Ctrl+L` | Toggle log panel |
-| `Ctrl+T` | Align multiple files |
-| `Ctrl+Q` | Quit application |
-| `Arrow Keys` | Navigate hex view |
-| `Tab` | Switch between panes |
-
-### Defining Binary Structures
-
-Use the construct editor to define your binary format:
-
-```python
-# Example: PNG file structure
-Struct(
-    "signature" / Bytes(8),
-    "chunks" / GreedyRange(
-        Struct(
-            "length" / Int32ub,
-            "type" / Bytes(4),
-            "data" / Bytes(this.length),
-            "crc" / Int32ub
-        )
-    )
-)
-```
-
-The structure will be applied in real-time to the loaded binary file.
-
-### Working with RawCopy
-
-BinTV automatically wraps fields with `RawCopy` to track offsets:
-
-```python
-# Your input:
-Struct("field" / Int32ul)
-
-# BinTV processes as:
-Struct("field" / RawCopy(Int32ul))
-```
-
-This provides offset information for visualization and navigation.
-
-## 🎨 Visualization Export
-
-BinTV can export your binary analysis as beautiful SVG diagrams:
-
-```python
-from bintv.visualization import create_gif_style_svg
-
-# After parsing your binary file
-svg_content = create_svg(
-    flattened_data,
-    raw_data,
-    title="MY FILE FORMAT"
-)
-
-# Save to file
-with open("visualization.svg", "w") as f:
-    f.write(svg_content)
-```
-
-### Visualization Features
-
-- **Dark theme** with syntax highlighting
-- **Color-coded fields** matching hex dump to structure
-- **Automatic layout** with connected field descriptions
-- **Responsive design** that adapts to content
-
-## 🏗️ Architecture
+## Example Log Messages
 
 ```
-.
-├── bintv
-│   ├── alignment.py
-│   ├── app.py
-│   ├── __init__.py
-│   ├── main.py
-│   ├── rawcopy_proxy.py
-│   ├── svg_exporter.py
-│   └── widgets
-│       ├── hex_view.py
-│       ├── __init__.py
-│       └── reactive_construct_tree.py
-├── imgs
-│   ├── binteratiview-tui.gif
-│   └── icon.svg
-├── README.md
-└── setup.py
+✅ Updated header.version: 1 → 2 at offset 0x0004
+✅ Updated header.flags: 4660 → 22136 at offset 0x000C
+💾 Saved modified file to: /tmp/firmware_modified.bin
 ```
 
-## 🤝 Contributing
+## Limitations
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+- Only primitive values (ints, bytes, strings, floats, bools) can be edited
+- Field size must remain the same (no growing/shrinking)
+- Defaults to little-endian for multi-byte integers
+- No undo/redo (use "Exit Without Saving" to discard)
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Documentation
 
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [Textual](https://github.com/Textualize/textual) - Amazing TUI framework
-- [Construct](https://github.com/construct/construct) - Powerful binary parsing library
-- [Rich](https://github.com/Textualize/rich) - Beautiful terminal formatting
-
-## 📮 Contact
-
-- GitHub: [@tomerfry](https://github.com/tomerfry)
+- **IMPLEMENTATION_GUIDE.md** - Detailed usage and troubleshooting
+- **ARCHITECTURE.md** - Technical details and component interaction
 
 ---
 
-<p align="center">Made with ❤️ for the binary analysis community</p>
+**Ready to use!** Open any binary file and start editing fields by right-clicking in the tree view.
