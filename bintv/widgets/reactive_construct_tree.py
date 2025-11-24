@@ -3,7 +3,7 @@ from textual.reactive import reactive
 from textual.widgets import Tree, Label, Input, Button, Static
 from textual.widgets.tree import TreeNode
 from textual.message import Message
-from textual.events import Click
+from textual.events import Click, Key
 from textual.screen import ModalScreen
 from textual.containers import Grid, Horizontal, Vertical
 from rich.text import Text
@@ -13,95 +13,94 @@ from construct import Container, ListContainer
 import struct
 import base64
 
-# --- 1. The Edit Value Screen ---
+# --- 1. The Dynamic Tooltip Editor ---
 class EditValueScreen(ModalScreen):
-    """A sleek modal for editing values."""
+    """A minimal, tooltip-style popover for quick editing."""
 
     CSS = """
     EditValueScreen {
-        align: center middle;
-        background: $background 80%;
+        align: left top;
+        background: transparent;
     }
 
-    #edit-dialog {
-        width: 60;
+    #popover-container {
+        width: 40;
         height: auto;
         background: $surface;
-        border: wide $primary;
-        padding: 1 2;
-        layout: grid;
-        grid-size: 2;
-        grid-columns: 1fr 3fr;
-        grid-rows: auto auto auto auto;
-        grid-gutter: 1;
+        border: solid $accent;
+        padding: 0 1;
+        /* box-shadow is not supported in Textual yet */
     }
 
-    .label { text-align: right; padding-top: 1; color: $text-muted; }
-    .value-info { color: $secondary; padding-top: 1; }
+    .info-label {
+        color: $text-muted;
+        text-style: italic;
+        padding-top: 1;
+    }
     
     #value-input {
         width: 100%;
-        column-span: 2;
-        margin-top: 1;
-        border: solid $accent;
+        margin-top: 0;
+        margin-bottom: 1;
+        border: none;
+        background: $surface-lighten-1;
     }
     
-    #value-input.error {
-        border: solid $error;
+    #value-input:focus {
+        border: none;
     }
-
-    #btn-container {
-        column-span: 2;
-        align: right middle;
-        margin-top: 1;
-    }
-    
-    Button { margin-left: 1; }
     """
 
-    def __init__(self, field_name: str, current_value: any, value_type: str):
+    def __init__(self, x: int, y: int, field_name: str, current_value: any, value_type: str):
         super().__init__()
+        self.target_x = x
+        self.target_y = y
         self.field_name = field_name
         self.current_value = current_value
         self.value_type = value_type
 
     def compose(self) -> ComposeResult:
-        with Grid(id="edit-dialog"):
-            yield Label("Field:", classes="label")
-            yield Label(f"[bold white]{self.field_name}[/]", classes="value-info")
+        with Vertical(id="popover-container"):
+            # A small label to show what we are editing
+            yield Label(f"Edit {self.field_name} ({self.value_type})", classes="info-label")
             
-            yield Label("Type:", classes="label")
-            yield Label(f"[{self._get_type_color()}]{self.value_type}[/]", classes="value-info")
-            
+            # The input field
             yield Input(
                 value=self._get_initial_text(),
-                placeholder=f"Enter new {self.value_type} value...",
-                id="value-input"
+                id="value-input",
+                classes="compact"
             )
 
-            with Horizontal(id="btn-container"):
-                yield Button("Cancel", variant="default", id="cancel")
-                yield Button("Patch", variant="primary", id="save")
-
-    def _get_type_color(self):
-        return "magenta" if self.value_type in ["byte", "int", "dword"] else "green"
+    def on_mount(self):
+        # Position the popover near the cursor/node
+        container = self.query_one("#popover-container")
+        container.styles.offset = (self.target_x, self.target_y)
+        
+        # Auto-focus the input so user can type immediately
+        self.query_one("#value-input").focus()
 
     def _get_initial_text(self):
         val = self.current_value
+        if val is None:
+            return ""
         if isinstance(val, bytes):
             return val.hex(" ")
         if isinstance(val, int):
             return f"0x{val:X}"
         return str(val)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel":
+    def on_key(self, event: Key) -> None:
+        """Handle special keys for the modal."""
+        if event.key == "escape":
             self.dismiss(None)
-        elif event.button.id == "save":
-            self._attempt_save()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._attempt_save()
+    
+    # Also support clicking outside to cancel
+    def on_click(self, event: Click) -> None:
+        if event.widget == self:
+            self.dismiss(None)
 
     def _attempt_save(self):
         input_widget = self.query_one("#value-input", Input)
@@ -111,10 +110,12 @@ class EditValueScreen(ModalScreen):
             new_value = self._parse_value(raw_text)
             self.dismiss(new_value)
         except ValueError as e:
-            input_widget.classes = "error"
+            input_widget.styles.background = "#550000" # Visual error feedback
             self.notify(str(e), severity="error")
 
     def _parse_value(self, text: str):
+        if not text: return None
+        
         if self.value_type in ["byte", "word", "dword", "int"]:
             text = text.replace("_", "")
             base = 16 if text.lower().startswith("0x") else 10
@@ -131,12 +132,12 @@ class EditValueScreen(ModalScreen):
 
 # --- 2. The Context Menu Screen ---
 class ContextMenu(ModalScreen):
-    """A pop-up context menu at a specific location."""
+    """A pop-up context menu."""
 
     CSS = """
     ContextMenu {
         align: left top;
-        background: transparent;  /* Transparent background to detect clicks outside */
+        background: transparent;
     }
 
     #menu-container {
@@ -172,48 +173,41 @@ class ContextMenu(ModalScreen):
         self.field_data = field_data
 
     def compose(self) -> ComposeResult:
-        # We wrap buttons in a Vertical container
         with Vertical(id="menu-container"):
             yield Button("✏️ Edit Value", id="edit-value")
             yield Button("📋 Copy Value", id="copy-value")
             yield Button("🚀 Go to Offset", id="goto-offset")
 
     def on_mount(self):
-        # Position the menu exactly where the mouse/cursor was
         container = self.query_one("#menu-container")
         container.styles.offset = (self.menu_x, self.menu_y)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        # Pass the action ID and the data back to the tree
         self.dismiss((event.button.id, self.field_data))
     
     def on_click(self, event: Click) -> None:
-        # If user clicks outside the menu container, close the menu
-        # The ModalScreen captures all clicks. We check if the click target is the screen itself (background).
         if event.widget == self:
             self.dismiss(None)
 
 
 # --- 3. The Reactive Tree Widget ---
 class ReactiveConstructTree(Tree):
-    """A custom Tree widget that displays Construct parsed data structures with context menu support."""
+    """A custom Tree widget that displays Construct parsed data structures."""
 
     BINDINGS = [
-        ("menu", "show_context_menu", "Context Menu"),       # Dedicated Menu Key
-        ("shift+f10", "show_context_menu", "Context Menu"),  # Windows/Linux Standard
+        ("menu", "show_context_menu", "Context Menu"),       
+        ("shift+f10", "show_context_menu", "Context Menu"),  
     ]
 
     parsed_data = reactive(None)
     _expanded_paths = set()
 
     class GotoOffsetRequest(Message):
-        """Message to request jumping to a specific file offset."""
         def __init__(self, offset: int):
             self.offset = offset
             super().__init__()
 
     class FieldEditRequest(Message):
-        """Message sent to the App to patch the binary."""
         def __init__(self, field_path: str, field_name: str, value: Any, value_type: str, offset: int, length: int):
             self.field_path = field_path
             self.field_name = field_name
@@ -228,34 +222,26 @@ class ReactiveConstructTree(Tree):
             self.app.log_message(message, level=level)
 
     def action_show_context_menu(self) -> None:
-        """Handle keyboard request for context menu."""
         node = self.cursor_node
-        if not node:
-            return
+        if not node: return
 
-        # Calculate coordinates for the menu (just below the selected line)
+        # Calculate coordinates for the menu
         relative_y = self.cursor_line - self.scroll_offset.y
         if 0 <= relative_y < self.size.height:
             screen_x = self.region.x + 8
             screen_y = self.region.y + relative_y + 1
-            
-            self._log(f"⌨️ Keyboard context menu for: {node.label}")
             self._show_context_menu(node, screen_x, screen_y)
         else:
             self._log("⚠️ Node is off-screen", level="warning")
 
     def on_click(self, event: Click) -> None:
-        """Handle mouse clicks."""
-        if event.button != 3: 
-            return
+        if event.button != 3: return
         
         node = self.get_node_at_line(event.y + self.scroll_offset.y)
         if node:
-            self._log(f"🖱️ Mouse context menu for: {node.label}")
             self._show_context_menu(node, event.screen_x, event.screen_y)
 
     def _show_context_menu(self, node, x: int, y: int):
-        """Shared logic to prepare and push the context menu."""
         if not node.data or "value" not in node.data:
             self._log("❌ No value data in node", level="warning")
             return
@@ -264,16 +250,16 @@ class ReactiveConstructTree(Tree):
             "path": node.data.get("path", ""),
             "key": node.data.get("key", ""),
             "value": node.data.get("value"),
-            "node": node
+            "node": node,
+            "trigger_x": x,
+            "trigger_y": y
         }
         
-        # Instantiate the now-defined ContextMenu class
         menu = ContextMenu(x, y, field_data)
         self.app.push_screen(menu, self.handle_menu_result)
 
     def handle_menu_result(self, result: tuple) -> None:
-        if not result:
-            return
+        if not result: return
 
         action, field_data = result
         field_name = field_data.get("key", "unknown")
@@ -297,8 +283,8 @@ class ReactiveConstructTree(Tree):
                     self.app.console.file.write(osc52)
                     self.app.console.file.flush()
                     self._log(f"📋 Copied: {copy_text[:30]}...")
-                except Exception as e:
-                    self._log(f"❌ Copy failed: {e}", level="warning")
+                except Exception:
+                    pass
                     
         elif action == "goto-offset":
             field_path = field_data.get("path", "")
@@ -313,9 +299,12 @@ class ReactiveConstructTree(Tree):
         current_value = field_data.get("value")
         field_key = field_data.get("key")
         
+        # Use the coordinates where the menu was triggered
+        target_x = field_data.get("trigger_x", 10)
+        target_y = field_data.get("trigger_y", 10)
+        
         start_offset, end_offset = self._get_field_offsets(field_path)
         
-        # Guard: Check if we actually found offsets
         if start_offset is None or end_offset is None:
              self._log(f"❌ Cannot edit '{field_key}': Offset information missing.", level="error")
              self.app.notify("Cannot edit: Offset missing (field might not use RawCopy)", severity="error")
@@ -323,7 +312,8 @@ class ReactiveConstructTree(Tree):
 
         value_type, _, _ = self.get_value_type_style(current_value)
 
-        edit_screen = EditValueScreen(field_key, current_value, value_type)
+        # Launch the new Tooltip Editor
+        edit_screen = EditValueScreen(target_x, target_y, field_key, current_value, value_type)
         
         def finish_edit(new_value):
             if new_value is not None:
@@ -342,31 +332,26 @@ class ReactiveConstructTree(Tree):
         self.app.push_screen(edit_screen, finish_edit)
 
     def _get_field_offsets(self, field_path: str) -> tuple:
-        """Get start and end offsets for a field by path, checking parent containers if needed."""
-        if not self.parsed_data:
-            return (None, None)
+        """Robust offset finder (checks parent containers)."""
+        if not self.parsed_data: return (None, None)
         
         parts = field_path.split("/")[1:]
         current = self.parsed_data
         parent = None
         
         try:
-            # Traverse to the node
             for part in parts:
-                parent = current # Track the parent before moving down
+                parent = current
                 if isinstance(current, (dict, Container)):
                     current = current[part]
                 elif isinstance(current, (list, ListContainer)):
                     idx = int(part.strip("[]"))
                     current = current[idx]
             
-            # 1. Direct Check: Does the selected node itself have offsets?
-            # (e.g. You selected the 'content' container directly)
+            # Check self
             if hasattr(current, "offset1") and hasattr(current, "offset2"):
                 return (current.offset1, current.offset2)
-            
-            # 2. Parent Check: Does the parent container have offsets?
-            # (e.g. You selected 'value' or 'data' INSIDE the 'content' container)
+            # Check parent
             if parent and hasattr(parent, "offset1") and hasattr(parent, "offset2"):
                 return (parent.offset1, parent.offset2)
                 
@@ -457,7 +442,7 @@ class ReactiveConstructTree(Tree):
                 if isinstance(value, (Container, dict, ListContainer, list)) and value:
                     value_type, value_style, display_value = self.get_value_type_style(value)
                     key_text.append(f" ({value_type})", style="dim")
-                    child = node.add(key_text, data={"path": current_path, "key": key})
+                    child = node.add(key_text, data={"path": current_path, "key": key, "value": value})
                     self.populate_node(child, value, current_path)
                 else:
                     value_type, value_style, display_value = self.get_value_type_style(value)
@@ -473,7 +458,7 @@ class ReactiveConstructTree(Tree):
                 if isinstance(item, (Container, dict, ListContainer, list)) and item:
                     value_type, value_style, display_value = self.get_value_type_style(item)
                     index_text.append(f" ({value_type})", style="dim")
-                    child = node.add(index_text, data={"path": current_path, "index": i})
+                    child = node.add(index_text, data={"path": current_path, "index": i, "value": item})
                     self.populate_node(child, item, current_path)
                 else:
                     value_type, value_style, display_value = self.get_value_type_style(item)
