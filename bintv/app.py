@@ -68,22 +68,17 @@ class ConfirmExitScreen(ModalScreen):
     def __init__(self, has_unsaved_changes: bool):
         super().__init__()
         self.has_unsaved_changes = has_unsaved_changes
-    
-    def compose(self) -> ComposeResult:
-        message = "You have unsaved changes. Do you want to save them before exiting?" if self.has_unsaved_changes else "Are you sure you want to exit?"
-        
-        with Vertical(id="confirm-dialog"):
-            yield Label(f"[bold yellow]⚠️  Exit Confirmation[/]")
-            yield Label(message)
+  
+    def compose(self):
+        with Grid(id="confirm-dialog"):
+            yield Label("You have unsaved changes.\nDo you want to save before quitting?")
+
             with Horizontal(id="confirm-buttons"):
-                if self.has_unsaved_changes:
-                    yield Button("💾 Save & Exit", variant="primary", id="save-exit")
-                    yield Button("🚫 Exit Without Saving", variant="error", id="no-save-exit")
-                    yield Button("Cancel", variant="default", id="cancel")
-                else:
-                    yield Button("Yes, Exit", variant="error", id="no-save-exit")
-                    yield Button("Cancel", variant="default", id="cancel")
-    
+                # These IDs match the on_button_pressed handler you wrote
+                yield Button("Save & Exit", variant="primary", id="save-exit")
+                yield Button("Discard & Exit", variant="error", id="no-save-exit")
+                yield Button("Cancel", variant="default", id="cancel")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
         if event.button.id == "save-exit":
@@ -254,13 +249,16 @@ class BintvApp(App):
         with Horizontal():
             with Vertical():
                 yield TextArea(id="construct-editor", text="Struct(\"content\" / GreedyBytes)")
-                yield ReactiveConstructTree(id="construct-tree")
+                
+                # FIX: Added "Struct Data" label here
+                yield ReactiveConstructTree("Struct Data", id="construct-tree")
+                
             with Vertical():
                 with TabbedContent(id="tabbed-content"):
                     if self.target:
                         yield TabPane(f"HexPane-{self.pane_count}", id=f"hex-pane-{self.pane_count}")
         yield Log(id="log-panel", auto_scroll=True, highlight=True)
-        yield DirectoryTree("./", id="file-chooser") 
+        yield DirectoryTree("./", id="file-chooser")
 
     def flatten_construct_offsets(self, parent_prefix=""):
         result = []
@@ -380,72 +378,58 @@ class BintvApp(App):
 
     def on_reactive_construct_tree_edit_value_request(self, msg: ReactiveConstructTree.FieldEditRequest) -> None:
         """Handle field edit request from the tree."""
-        def handle_edit_result(edited: bool) -> None:
-            if edited:
-                # Value was edited, will be handled by on_edit_value_screen_value_edited
-                pass
         
-        # Show edit dialog
+        # This callback receives the result from EditValueScreen.dismiss()
+        def handle_edit_result(new_value) -> None:
+            # If user pressed Cancel, new_value is None
+            if new_value is None:
+                return
+
+            try:
+                # 1. Get offsets directly from the message
+                start_offset = msg.offset
+                length = msg.length
+                
+                # 2. Convert new value to bytes
+                # msg.value is the OLD value, new_value is the NEW input
+                new_bytes = self._value_to_bytes(new_value, msg.value_type, length, msg.value)
+                
+                if len(new_bytes) != length:
+                     self.log_message(f"Size mismatch: New {len(new_bytes)} vs Old {length}", level="error")
+                     return
+                
+                # 3. Patch the data
+                self.data[start_offset : start_offset + length] = new_bytes
+                
+                # 4. Update UI
+                self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = self.data
+                
+                # 5. Track changes
+                self.has_unsaved_changes = True
+                self.modified_fields[msg.field_path] = {
+                    "old": msg.value,
+                    "new": new_value,
+                    "offset": start_offset
+                }
+                
+                # 6. Reparse
+                self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
+                
+                self.log_message(
+                    f"✅ Updated {msg.field_name}: {msg.value} -> {new_value}", 
+                    level="info"
+                )
+                
+            except Exception as e:
+                self.log_message(f"Error updating field: {str(e)}", level="error")
+
+        # Show the screen and register the callback
         edit_screen = EditValueScreen(
             field_name=msg.field_name,
-            field_path=msg.field_path,
             current_value=msg.value,
             value_type=msg.value_type
         )
         self.push_screen(edit_screen, handle_edit_result)
-
-    def on_edit_value_screen_value_edited(self, msg: EditValueScreen.ValueEdited) -> None:
-        """Handle the value edit from EditValueScreen."""
-        try:
-            # Find the field in flattened data to get offset information
-            target_field = None
-            for item in self._flattened_construct_data:
-                if item["name"] == msg.field_path.lstrip("/"):
-                    target_field = item
-                    break
-            
-            if not target_field or target_field["start"] is None:
-                self.log_message(f"Cannot edit field without offset information", level="error")
-                return
-            
-            start_offset = target_field["start"]
-            end_offset = target_field["end"]
-            field_size = end_offset - start_offset
-            
-            # Convert the new value to bytes based on type
-            new_bytes = self._value_to_bytes(msg.new_value, msg.value_type, field_size, msg.old_value)
-            
-            if len(new_bytes) != field_size:
-                self.log_message(
-                    f"Size mismatch: new value is {len(new_bytes)} bytes, field is {field_size} bytes",
-                    level="error"
-                )
-                return
-            
-            # Update the data
-            self.data[start_offset:end_offset] = new_bytes
-            
-            # Update hex view
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = self.data
-            
-            # Mark as having unsaved changes
-            self.has_unsaved_changes = True
-            self.modified_fields[msg.field_path] = {
-                "old": msg.old_value,
-                "new": msg.new_value,
-                "offset": start_offset
-            }
-            
-            # Reparse with the updated data
-            self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
-            
-            self.log_message(
-                f"✅ Updated {msg.field_path}: {msg.old_value} → {msg.new_value} at offset 0x{start_offset:04x}",
-                level="info"
-            )
-            
-        except Exception as e:
-            self.log_message(f"Error updating field: {str(e)}", level="error")
 
     def _value_to_bytes(self, value, value_type: str, expected_size: int, original_value) -> bytes:
         """Convert a value to bytes based on its type."""
