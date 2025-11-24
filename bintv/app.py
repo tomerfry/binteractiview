@@ -376,120 +376,96 @@ class BintvApp(App):
         self.query_one(f"#{msg.id}-bottom-line").update(f"{hex(msg.offset)} - Currently on field {the_name}")
         self.query_one(f"#{msg.id}").highlighted_field = (name, start, end)
 
-    def on_reactive_construct_tree_edit_value_request(self, msg: ReactiveConstructTree.FieldEditRequest) -> None:
-        """Handle field edit request from the tree."""
-        
-        # This callback receives the result from EditValueScreen.dismiss()
-        def handle_edit_result(new_value) -> None:
-            # If user pressed Cancel, new_value is None
-            if new_value is None:
-                return
+    def on_reactive_construct_tree_field_edit_request(self, msg: ReactiveConstructTree.FieldEditRequest) -> None:
+        """
+        Handle the patch request from the tree.
+        1. Update the bytearray.
+        2. Refresh Hex View.
+        3. Re-parse the tree to show new values/offsets.
+        """
+        try:
+            # --- 1. PREPARE DATA ---
+            start_offset = msg.offset
+            length = msg.length
+            
+            # Convert the input value (int, string, etc.) to raw bytes
+            # We use the helper method _value_to_bytes (see below)
+            new_bytes = self._value_to_bytes(msg.value, msg.value_type, length, msg.value)
 
-            try:
-                # 1. Get offsets directly from the message
-                start_offset = msg.offset
-                length = msg.length
-                
-                # 2. Convert new value to bytes
-                # msg.value is the OLD value, new_value is the NEW input
-                new_bytes = self._value_to_bytes(new_value, msg.value_type, length, msg.value)
-                
-                if len(new_bytes) != length:
-                     self.log_message(f"Size mismatch: New {len(new_bytes)} vs Old {length}", level="error")
-                     return
-                
-                # 3. Patch the data
-                self.data[start_offset : start_offset + length] = new_bytes
-                
-                # 4. Update UI
-                self.query_one(f"#hex-pane-{self.pane_count}-hex-view").data = self.data
-                
-                # 5. Track changes
-                self.has_unsaved_changes = True
-                self.modified_fields[msg.field_path] = {
-                    "old": msg.value,
-                    "new": new_value,
-                    "offset": start_offset
-                }
-                
-                # 6. Reparse
-                self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
-                
-                self.log_message(
-                    f"✅ Updated {msg.field_name}: {msg.value} -> {new_value}", 
-                    level="info"
-                )
-                
-            except Exception as e:
-                self.log_message(f"Error updating field: {str(e)}", level="error")
+            # Safety check: Ensure we don't accidentally resize the file 
+            # (unless your format supports shifting bytes, but usually we just overwrite)
+            if len(new_bytes) != length:
+                self.log_message(f"⚠️ Size mismatch! Expected {length} bytes, got {len(new_bytes)}.", level="warning")
+                # Optional: Handle resizing if you really want to support it
+                # For now, we abort to prevent corruption
+                if len(new_bytes) > length:
+                    new_bytes = new_bytes[:length]
+                else:
+                    new_bytes = new_bytes.ljust(length, b'\x00')
 
-        # Show the screen and register the callback
-        edit_screen = EditValueScreen(
-            field_name=msg.field_name,
-            current_value=msg.value,
-            value_type=msg.value_type
-        )
-        self.push_screen(edit_screen, handle_edit_result)
+            # --- 2. PATCH DATA ---
+            # Update the in-memory binary
+            self.data[start_offset : start_offset + length] = new_bytes
+            
+            # Mark as modified for the "Save on Exit" dialog
+            self.has_unsaved_changes = True
+
+            # --- 3. UPDATE UI ---
+            
+            # A. Update Hex View immediately
+            current_hex_pane = self.query_one(f"#hex-pane-{self.pane_count}-hex-view")
+            current_hex_pane.data = self.data
+            
+            # B. Re-parse the Construct logic
+            # This will refresh the tree values and recalculate all offsets
+            # (in case the change affects subsequent fields)
+            self.on_text_area_changed(TextArea.Changed(self.query_one("#construct-editor")))
+
+            self.log_message(f"✅ Patched {msg.field_name} at 0x{start_offset:X}", level="info")
+
+        except Exception as e:
+            self.log_message(f"❌ Failed to patch: {e}", level="error")
 
     def _value_to_bytes(self, value, value_type: str, expected_size: int, original_value) -> bytes:
-        """Convert a value to bytes based on its type."""
+        """Helper to pack values back into bytes."""
+        import struct
         
-        if isinstance(value, bytes):
-            return value
-        
-        elif value_type in ["byte", "word", "dword", "int"]:
-            # Determine endianness and signedness from original value context
-            # For simplicity, we'll try to match the size
-            if expected_size == 1:
-                # Byte
-                if isinstance(original_value, int) and original_value < 0:
-                    return struct_module.pack('b', value)
+        try:
+            if isinstance(value, bytes):
+                return value
+                
+            if value_type in ["byte", "int", "word", "dword"]:
+                # Simple packing heuristics. 
+                # Ideally, you'd use the Construct object itself to build, 
+                # but for raw patching, struct packing is faster and often sufficient.
+                
+                is_signed = expected_size in [1, 2, 4, 8] and int(value) < 0
+                
+                if expected_size == 1:
+                    fmt = 'b' if is_signed else 'B'
+                elif expected_size == 2:
+                    fmt = '<h' if is_signed else '<H' # Assume Little Endian
+                elif expected_size == 4:
+                    fmt = '<i' if is_signed else '<I'
+                elif expected_size == 8:
+                    fmt = '<q' if is_signed else '<Q'
                 else:
-                    return struct_module.pack('B', value)
-            elif expected_size == 2:
-                # Word - assume little endian for now
-                if isinstance(original_value, int) and original_value < 0:
-                    return struct_module.pack('<h', value)
-                else:
-                    return struct_module.pack('<H', value)
-            elif expected_size == 4:
-                # Dword - assume little endian
-                if isinstance(original_value, int) and original_value < 0:
-                    return struct_module.pack('<i', value)
-                else:
-                    return struct_module.pack('<I', value)
-            elif expected_size == 8:
-                # Qword - assume little endian
-                if isinstance(original_value, int) and original_value < 0:
-                    return struct_module.pack('<q', value)
-                else:
-                    return struct_module.pack('<Q', value)
-            else:
-                raise ValueError(f"Unsupported integer size: {expected_size}")
-        
-        elif value_type == "float":
-            if expected_size == 4:
-                return struct_module.pack('<f', value)
-            elif expected_size == 8:
-                return struct_module.pack('<d', value)
-            else:
-                raise ValueError(f"Unsupported float size: {expected_size}")
-        
-        elif value_type == "str":
-            # Convert string to bytes
-            encoded = value.encode('utf-8')
-            if len(encoded) > expected_size:
-                encoded = encoded[:expected_size]
-            elif len(encoded) < expected_size:
-                # Pad with nulls
-                encoded += b'\x00' * (expected_size - len(encoded))
-            return encoded
-        
-        elif value_type == "bool":
-            return b'\x01' if value else b'\x00'
-        
-        else:
-            raise ValueError(f"Cannot convert type {value_type} to bytes")
+                    # Fallback for weird sizes (e.g. 3 bytes): manual int-to-bytes
+                    return int(value).to_bytes(expected_size, byteorder='little', signed=is_signed)
+                    
+                return struct.pack(fmt, int(value))
+
+            elif value_type == "float":
+                if expected_size == 4: return struct.pack('<f', float(value))
+                if expected_size == 8: return struct.pack('<d', float(value))
+
+            elif value_type == "str":
+                return str(value).encode('utf-8')
+
+            return bytes(value) # Last resort
+            
+        except Exception as e:
+            raise ValueError(f"Conversion failed: {e}")
 
     def on_reactive_construct_tree_goto_offset_request(self, msg: ReactiveConstructTree.GotoOffsetRequest) -> None:
         """Handle goto offset request from tree."""
