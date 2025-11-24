@@ -196,7 +196,7 @@ class ReactiveConstructTree(Tree):
 
     BINDINGS = [
         ("menu", "show_context_menu", "Context Menu"),       
-        ("ctrl+tab", "show_context_menu", "Context Menu"),  
+        ("right", "show_context_menu", "Context Menu"),  
     ]
 
     parsed_data = reactive(None)
