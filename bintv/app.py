@@ -378,7 +378,7 @@ class BintvApp(App):
         self.query_one(f"#{msg.id}-bottom-line").update(f"{hex(msg.offset)} - Currently on field {the_name}")
         self.query_one(f"#{msg.id}").highlighted_field = (name, start, end)
 
-    def on_reactive_construct_tree_field_edit_request(self, msg: ReactiveConstructTree.FieldEditRequest) -> None:
+    def on_reactive_construct_tree_edit_value_request(self, msg: ReactiveConstructTree.FieldEditRequest) -> None:
         """Handle field edit request from the tree."""
         def handle_edit_result(edited: bool) -> None:
             if edited:
