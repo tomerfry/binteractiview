@@ -738,11 +738,54 @@ def neon_rgb(count: int, theme: str = 'cyber', method: str = 'balanced', mode: s
     palette = generator.generate(count, theme, method, color_mode)
     return palette.rgb_colors()
 
+# neon_pallete.py
+import colorsys
+import random
 
-def neon_background_colors(count: int, theme: str = 'cyber', method: str = 'balanced') -> List[str]:
-    """Quick function to get background-suitable hex colors"""
-    return neon_colors(count, theme, method, 'background')
+import colorsys
+import random
 
+def generate_golden_ratio_colors(n, saturation=0.85, value=0.95):
+    """
+    Generates distinct, high-contrast neon colors using the Golden Ratio.
+    This prevents 'muddy' colors and ensures neighbors are visually distinct.
+    
+    Args:
+        n (int): Number of colors to generate.
+        saturation (float): 0.0 to 1.0 (Color intensity).
+        value (float): 0.0 to 1.0 (Brightness/Lightness).
+    """
+    golden_ratio_conjugate = 0.618033988749895
+    h = random.random() # Random start
+    colors = []
+    
+    for _ in range(n):
+        h += golden_ratio_conjugate
+        h %= 1
+        # Convert Hsv to Rgb
+        r, g, b = colorsys.hsv_to_rgb(h, saturation, value)
+        # Convert to Hex
+        hex_code = '#{:02x}{:02x}{:02x}'.format(int(r*255), int(g*255), int(b*255))
+        colors.append(hex_code)
+        
+    return colors
+
+def neon_background_colors(n):
+    """
+    Generates colors suitable for BACKGROUNDS in the TUI.
+    These must be darker/dimmer so that White/Light text is readable on top of them.
+    Value is lowered to 0.35 to ensure contrast.
+    """
+    # High saturation keeps them colorful, Low value makes them dark enough for white text
+    return generate_golden_ratio_colors(n, saturation=0.7, value=0.35)
+
+def generate_text_colors(n):
+    """
+    Generates colors suitable for TEXT in the SVG.
+    These must be very bright/high value to pop against a dark background.
+    """
+    # High saturation and Max value for "Neon Glow" effect
+    return generate_golden_ratio_colors(n, saturation=0.9, value=1.0)
 
 def neon_terminal_pair(count: int, theme: str = 'cyber', method: str = 'balanced') -> Tuple[List[str], List[str]]:
     """Get matching foreground and background color pairs for terminal use"""

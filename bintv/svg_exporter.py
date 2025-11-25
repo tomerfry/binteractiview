@@ -1,405 +1,267 @@
-from construct import *
-from typing import List, Dict, Any, Tuple
-import colorsys
 import html
-import textwrap
+from construct import Container, ListContainer
 
-def create_svg(flattened_data: List[Dict[str, Any]], 
-                        raw_data: bytes,
-                        title: str = "Binary Format",
-                        width: int = 1200,
-                        height: int = None) -> str:
+def format_value_condensed(val):
     """
-    Args:
-        flattened_data: Output from flatten_construct_offsets()
-        raw_data: The raw binary data
-        title: Title for the format (e.g., "GRAPHICS INTERCHANGE FORMAT")
-        width: SVG width in pixels
-        height: SVG height in pixels (auto-calculated if None)
-    
-    Returns:
-        SVG string
+    Creates a condensed, human-readable string representation of a value.
+    Useful for showing 'Processed' data (e.g. decrypted bytes, parsed ints).
+    """
+    if isinstance(val, (bytes, bytearray)):
+        if not val:
+            return "b''"
+        
+        # Heuristic: If it looks like a printable string, show it as text
+        # Check first 16 bytes for non-printable chars
+        is_text = True
+        sample = val[:16]
+        for b in sample:
+            if not (32 <= b < 127):
+                is_text = False
+                break
+        
+        if is_text:
+            text = val.decode('ascii', errors='ignore')
+            if len(val) > 16:
+                return f'b"{text}..."'
+            return f'b"{text}"'
+        else:
+            # Show Hex preview
+            hex_str = sample.hex(' ').upper()
+            if len(val) > 16:
+                return f"[{len(val)}] {hex_str}..."
+            return f"[{len(val)}] {hex_str}"
+
+    if isinstance(val, int):
+        # Show Dec and Hex
+        return f"{val} (0x{val:X})"
+        
+    if isinstance(val, str):
+        clean = val.replace('\n', '\\n').replace('\r', '\\r')
+        if len(clean) > 24:
+            return f'"{clean[:24]}..."'
+        return f'"{clean}"'
+        
+    if val is None:
+        return ""
+        
+    # Fallback for other types
+    s = str(val)
+    if len(s) > 24:
+        return f"{s[:24]}..."
+    return s
+
+def create_svg(flattened_data, raw_data, title="BINARY STRUCTURE", width=1400):
+    """
+    Generates a 'Corkami-style' technical poster SVG with funneling connectors.
+    Includes Processed Value view.
     """
     
-    # Filter out items without offset information
-    items_with_offsets = [item for item in flattened_data if item['start'] is not None]
+    # --- 1. FILTER & PREP DATA ---
+    filtered_data = []
+    excluded_names = {'offset1', 'offset2', 'length'}
     
-    if not items_with_offsets:
-        return '<svg><text x="10" y="20">No offset data available</text></svg>'
+    # Determine interesting rows for sparse view
+    hex_cols = 16
+    interesting_rows = set()
+    interesting_rows.add(0)
+    interesting_rows.add((len(raw_data) - 1) // hex_cols)
     
-    # Group items by their top-level parent
-    sections = {}
-    for item in items_with_offsets:
-        parts = item['name'].split('.')
-        section = parts[0]
-        if section not in sections:
-            sections[section] = []
-        sections[section].append(item)
+    for field in flattened_data:
+        name = field['name'].split('.')[-1]
+        
+        if (name in excluded_names or 
+            name.startswith('_') or 
+            '_io' in name or 
+            'subcon' in name):
+            continue
+            
+        # Only add to list if it's not a container (containers usually don't have interesting 'values' to show directly)
+        # But we keep them for hierarchy if needed. For now, we accept everything passed.
+        filtered_data.append(field)
+        
+        if field['start'] is not None:
+            start_row = field['start'] // hex_cols
+            end_row = (field['end'] - 1) // hex_cols
+            interesting_rows.add(start_row)
+            interesting_rows.add(end_row)
     
-    # Calculate required height if not provided
-    if height is None:
-        # Calculate based on content
-        hex_rows = min(6, (len(raw_data) + 15) // 16)
-        hex_height = hex_rows * 22 + 60
-        sections_height = sum(70 + len(items) * 22 for items in sections.values()) + len(sections) * 20
-        height = max(800, 140 + max(hex_height + 200, sections_height) + 150)
+    flattened_data = filtered_data
     
-    # Start building SVG with dark background
-    svg_parts = []
-    svg_parts.append(f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">')
+    sorted_rows = sorted(list(interesting_rows))
+    rows_to_render = []
+    if sorted_rows:
+        prev = sorted_rows[0]
+        rows_to_render.append(prev)
+        for r in sorted_rows[1:]:
+            if r > prev + 1:
+                rows_to_render.append('SKIP')
+            if r != prev:
+                rows_to_render.append(r)
+            prev = r
+
+    # --- 2. CONFIGURATION & STYLES ---
     
-    # Dark theme styles
-    svg_parts.append('''
+    hex_row_h = 24
+    skip_row_h = 15
+    field_row_h = 28
+    
+    hex_visual_height = 0
+    for r in rows_to_render:
+        hex_visual_height += skip_row_h if r == 'SKIP' else hex_row_h
+        
+    total_field_rows = len(flattened_data)
+    content_height = max(hex_visual_height, total_field_rows * field_row_h)
+    height = content_height + 250 
+    
+    bg_color = "#151515"
+    text_main = "#eeeeee"
+    text_dim = "#666666"
+    
+    from bintv.neon_pallete import generate_text_colors
+    palette = generate_text_colors(len(flattened_data))
+
+    svg = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">')
+    
+    svg.append(f'''
     <defs>
         <style>
-            .background { fill: #1a1a1a; }
-            .title { font-family: Arial, sans-serif; font-size: 52px; font-weight: normal; letter-spacing: 8px; word-spacing: 20px; }
-            .title-orange { fill: #FF6600; }
-            .title-white { fill: #FFFFFF; }
-            .section-title { font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; fill: #FFFFFF; }
-            .field-name { font-family: Consolas, Monaco, monospace; font-size: 13px; fill: #FFD700; }
-            .field-value { font-family: Consolas, Monaco, monospace; font-size: 13px; fill: #FFFFFF; }
-            .field-label { font-family: Consolas, Monaco, monospace; font-size: 11px; fill: #999; text-transform: uppercase; letter-spacing: 1px; }
-            .hex-text { font-family: Consolas, Monaco, monospace; font-size: 13px; font-weight: 500; fill: #FFFFFF; }
-            .hex-offset { font-family: Consolas, Monaco, monospace; font-size: 12px; fill: #888; font-weight: bold; }
-            .ascii-text { font-family: Consolas, Monaco, monospace; font-size: 11px; font-weight: 500; }
-            .connector-line { stroke-width: 2; fill: none; opacity: 0.8; }
-            .section-box { stroke: #444; stroke-width: 1.5; }
-            .hex-box { fill: #2a2a2a; stroke: #444; stroke-width: 2; }
-            .hex-highlight { opacity: 1; }
-            .copyright { font-family: Arial, sans-serif; font-size: 11px; fill: #666; }
-            .description { font-family: Georgia, serif; font-size: 15px; fill: #CCC; line-height: 1.6; }
+            @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&amp;family=Neucha&amp;display=swap');
+            
+            .bg {{ fill: {bg_color}; }}
+            .title {{ font-family: 'Neucha', 'Comic Sans MS', sans-serif; font-size: 48px; fill: {text_main}; }}
+            .subtitle {{ font-family: 'Fira Code', monospace; font-size: 14px; fill: {text_dim}; }}
+            
+            .hex-byte {{ font-family: 'Fira Code', monospace; font-size: 13px; }}
+            .hex-ascii {{ font-family: 'Fira Code', monospace; font-size: 13px; opacity: 0.7; }}
+            .hex-offset {{ font-family: 'Fira Code', monospace; font-size: 12px; fill: {text_dim}; }}
+            .hex-skip {{ font-family: 'Fira Code', monospace; font-size: 12px; fill: {text_dim}; text-anchor: middle; }}
+            
+            .field-name {{ font-family: 'Fira Code', monospace; font-size: 15px; font-weight: 600; }}
+            .field-value {{ font-family: 'Fira Code', monospace; font-size: 14px; fill: {text_main}; opacity: 0.9; }}
+            
+            .connector {{ fill: none; stroke-width: 1.5; opacity: 0.8; }}
+            .funnel-line {{ stroke-width: 2; opacity: 0.5; }}
+            
+            .glow {{ filter: url(#glow); }}
         </style>
-        <filter id="glow">
-            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
-            <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-            </feMerge>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
         </filter>
     </defs>
+    <rect width="100%" height="100%" class="bg"/>
     ''')
+
+    # --- 3. LAYOUT CALCULATIONS ---
     
-    # Dark background
-    svg_parts.append(f'<rect width="{width}" height="{height}" class="background"/>')
+    margin_x = 30
+    margin_y = 100
     
-    # Title with proper spacing
-    title_text = ' '.join(title.upper().split())
-    svg_parts.append(f'<text x="60" y="70" class="title">')
-    words = title_text.split()
-    for i, word in enumerate(words):
-        if i % 2 == 0:
-            svg_parts.append(f'<tspan class="title-orange">{word}</tspan>')
+    hex_byte_w = 22
+    ascii_byte_w = 9
+    
+    x_offset_col = margin_x
+    x_hex_col = x_offset_col + 50
+    x_ascii_col = x_hex_col + (hex_cols * hex_byte_w) + 15
+    x_funnel_start = x_ascii_col + (hex_cols * ascii_byte_w) + 10
+    
+    # Columns for the Tree View
+    x_tree_name = x_funnel_start + 100
+    x_tree_value = x_tree_name + 200 # Offset for the value column
+    
+    safe_title = html.escape(title)
+    svg.append(f'<text x="{width/2}" y="50" text-anchor="middle" class="title glow">{safe_title}</text>')
+    svg.append(f'<text x="{width/2}" y="75" text-anchor="middle" class="subtitle">Generated by BinTV</text>')
+
+    # --- 4. RENDER SPARSE HEX DUMP ---
+    
+    byte_row_map = {}
+    
+    y_cursor = margin_y
+    
+    for row_item in rows_to_render:
+        if row_item == 'SKIP':
+            center_hex = x_hex_col + (8 * hex_byte_w)
+            center_ascii = x_ascii_col + (8 * ascii_byte_w)
+            svg.append(f'<text x="{center_hex}" y="{y_cursor}" class="hex-skip">⋮</text>')
+            svg.append(f'<text x="{center_ascii}" y="{y_cursor}" class="hex-skip">⋮</text>')
+            y_cursor += skip_row_h
         else:
-            svg_parts.append(f'<tspan class="title-white">{word}</tspan>')
-        if i < len(words) - 1:
-            svg_parts.append(' ')
-    svg_parts.append('</text>')
-    
-    # Hex dump on the left
-    hex_x = 60
-    hex_y = 140
-    bytes_per_row = 16
-    rows_to_show = min(6, (len(raw_data) + bytes_per_row - 1) // bytes_per_row)
-    hex_width = 650  # Increased to accommodate ASCII
-    hex_height = rows_to_show * 22 + 50
-    
-    # Draw hex dump box
-    svg_parts.append(f'<rect x="{hex_x}" y="{hex_y}" width="{hex_width}" height="{hex_height}" class="hex-box"/>')
-    
-    # Create color palette for sections
-    color_palette = {
-        'header': '#FF6B6B',
-        'logical_screen': '#4ECDC4', 
-        'global_color_table': '#95E1D3',
-        'image': '#F38181',
-        'trailer': '#AA96DA',
-        'default': '#FFD93D'
-    }
-    
-    # Create a map of byte positions to fields for continuous coloring
-    byte_field_map = {}
-    for item in items_with_offsets:
-        section = item['name'].split('.')[0]
-        color = color_palette.get(section, color_palette['default'])
-        for pos in range(item['start'], item['end']):
-            byte_field_map[pos] = (section, color)
-    
-    # Draw continuous colored backgrounds first
-    for row in range(rows_to_show):
-        offset = row * bytes_per_row
-        y = hex_y + 35 + row * 22
-        
-        # Group consecutive bytes with same color
-        col = 0
-        while col < bytes_per_row and offset + col < len(raw_data):
-            byte_offset = offset + col
-            if byte_offset in byte_field_map:
-                section, color = byte_field_map[byte_offset]
-                # Find how many consecutive bytes have the same color
-                consecutive = 1
-                while (col + consecutive < bytes_per_row and 
-                       offset + col + consecutive < len(raw_data) and
-                       offset + col + consecutive in byte_field_map and
-                       byte_field_map[offset + col + consecutive][0] == section):
-                    consecutive += 1
+            i = row_item * hex_cols
+            svg.append(f'<text x="{x_offset_col}" y="{y_cursor}" class="hex-offset">{i:04X}</text>')
+            
+            chunk = raw_data[i:i+hex_cols]
+            for c_idx, byte in enumerate(chunk):
+                abs_idx = i + c_idx
                 
-                # Draw continuous background for hex
-                x = hex_x + 70 + col * 26
-                width_bg = consecutive * 26 - 4
-                svg_parts.append(f'<rect x="{x-3}" y="{y-15}" width="{width_bg}" height="18" fill="{color}" opacity="0.3"/>')
+                byte_color = text_dim
+                for f_idx, field in enumerate(flattened_data):
+                    if field['start'] is not None and field['start'] <= abs_idx < field['end']:
+                        byte_color = palette[f_idx % len(palette)]
+                        break
                 
-                # Draw continuous background for ASCII
-                ascii_x = hex_x + 490 + col * 10
-                ascii_width = consecutive * 10 - 2
-                svg_parts.append(f'<rect x="{ascii_x-1}" y="{y-15}" width="{ascii_width}" height="18" fill="{color}" opacity="0.3"/>')
+                bx = x_hex_col + (c_idx * hex_byte_w)
+                svg.append(f'<text x="{bx}" y="{y_cursor}" class="hex-byte" fill="{byte_color}">{byte:02X}</text>')
                 
-                col += consecutive
-            else:
-                col += 1
-    
-    # Draw hex values and ASCII
-    for row in range(rows_to_show):
-        offset = row * bytes_per_row
-        y = hex_y + 35 + row * 22
-        
-        # Offset
-        svg_parts.append(f'<text x="{hex_x + 15}" y="{y}" class="hex-offset">{offset:02X}:</text>')
-        
-        # Hex values
-        for col in range(bytes_per_row):
-            byte_offset = offset + col
-            if byte_offset < len(raw_data):
-                x = hex_x + 70 + col * 26
-                hex_val = f"{raw_data[byte_offset]:02X}"
-                svg_parts.append(f'<text x="{x}" y="{y}" class="hex-text">{hex_val}</text>')
-        
-        # ASCII representation with color coding
-        ascii_x = hex_x + 490
-        for col in range(min(bytes_per_row, len(raw_data) - offset)):
-            byte_offset = offset + col
-            byte_val = raw_data[byte_offset]
-            char = chr(byte_val) if 32 <= byte_val < 127 else '·'
-            x = ascii_x + col * 10
+                ax = x_ascii_col + (c_idx * ascii_byte_w)
+                char = chr(byte) if 32 <= byte < 127 else '.'
+                char = html.escape(char)
+                svg.append(f'<text x="{ax}" y="{y_cursor}" class="hex-ascii" fill="{byte_color}">{char}</text>')
+                
+                byte_row_map[abs_idx] = y_cursor
             
-            # Get color for ASCII character
-            ascii_color = '#666'  # default
-            if byte_offset in byte_field_map:
-                _, field_color = byte_field_map[byte_offset]
-                ascii_color = field_color
-            
-            svg_parts.append(f'<text x="{x}" y="{y}" class="ascii-text" fill="{ascii_color}">{html.escape(char)}</text>')
-    
-    # Draw connectors and field descriptions
-    section_y = hex_y
-    section_x = hex_x + hex_width + 80
-    
-    for section_idx, (section_name, section_items) in enumerate(sections.items()):
-        # Get section color
-        section_color = color_palette.get(section_name, color_palette['default'])
-        
-        # Draw section box with section's color theme
-        box_height = 50 + len(section_items) * 22
-        svg_parts.append(f'<rect x="{section_x}" y="{section_y}" width="400" height="{box_height}" rx="4" fill="{section_color}" opacity="0.15" stroke="{section_color}" class="section-box"/>')
-        
-        # Section title bar with stronger color
-        svg_parts.append(f'<rect x="{section_x}" y="{section_y}" width="400" height="35" rx="4" fill="{section_color}" opacity="0.3"/>')
-        
-        # Section title
-        section_title = section_name.upper().replace('_', ' ')
-        svg_parts.append(f'<text x="{section_x + 15}" y="{section_y + 25}" class="section-title" filter="url(#glow)">{section_title}</text>')
-        
-        # Draw smooth connector with section color
-        connector_start_x = hex_x + hex_width
-        connector_start_y = hex_y + 40 + (section_idx * 30)
-        connector_end_x = section_x
-        connector_end_y = section_y + box_height // 2
-        
-        control_x = (connector_start_x + connector_end_x) / 2
-        svg_parts.append(f'''<path d="M {connector_start_x} {connector_start_y} 
-                          C {control_x} {connector_start_y}, {control_x} {connector_end_y}, 
-                          {connector_end_x} {connector_end_y}" 
-                          class="connector-line" stroke="{section_color}"/>''')
-        
-        # Column headers
-        field_y = section_y + 45
-        svg_parts.append(f'<text x="{section_x + 150}" y="{field_y}" text-anchor="end" class="field-label">Fields</text>')
-        svg_parts.append(f'<text x="{section_x + 180}" y="{field_y}" class="field-label">Values</text>')
-        
-        # Divider line
-        svg_parts.append(f'<line x1="{section_x + 15}" y1="{field_y + 5}" x2="{section_x + 385}" y2="{field_y + 5}" stroke="{section_color}" stroke-width="1" opacity="0.3"/>')
-        
-        field_y += 20
-        for item in section_items:
-            # Field name
-            field_name = item['name'].split('.')[-1]
-            svg_parts.append(f'<text x="{section_x + 145}" y="{field_y}" text-anchor="end" class="field-name">{field_name}</text>')
-            
-            # Field value
-            value_str = format_field_value(item)
-            svg_parts.append(f'<text x="{section_x + 180}" y="{field_y}" class="field-value">{html.escape(value_str)}</text>')
-            
-            field_y += 20
-        
-        section_y += box_height + 20
-    
-    # Add visual sample if it's an image format
-    if any('width' in item['name'] and 'height' in item['name'] for item in items_with_offsets):
-        sample_x = 60
-        sample_y = hex_y + hex_height + 40
-        svg_parts.append(f'<rect x="{sample_x}" y="{sample_y}" width="120" height="80" stroke="#444" stroke-width="2" fill="#2a2a2a"/>')
-        svg_parts.append(f'<text x="{sample_x + 60}" y="{sample_y - 10}" text-anchor="middle" class="field-label">Visual Sample</text>')
-        
-        # Draw colored rectangles
-        colors = ['#FF6B6B', '#4ECDC4', '#95E1D3']
-        for i, color in enumerate(colors):
-            svg_parts.append(f'<rect x="{sample_x + 10 + i * 35}" y="{sample_y + 20}" width="30" height="40" fill="{color}"/>')
-    
-    # Add format description at bottom
-    desc_y = height - 120
-    svg_parts.append(f'<line x1="60" y1="{desc_y - 20}" x2="{width - 60}" y2="{desc_y - 20}" stroke="#444" stroke-width="1"/>')
-    
-    description_lines = [
-        f"THE {title.upper()} STRUCTURE.",
-        f"Total size: {len(raw_data)} bytes | {len(sections)} sections | {len(items_with_offsets)} fields",
-        "Each colored region in the hex dump corresponds to a field in the structure."
-    ]
-    
-    for i, line in enumerate(description_lines):
-        style = "description" if i == 0 else "copyright"
-        y_offset = desc_y + (i * 25)
-        svg_parts.append(f'<text x="60" y="{y_offset}" class="{style}">{line}</text>')
-    
-    # Add attribution
-    svg_parts.append(f'<text x="{width - 60}" y="{height - 20}" text-anchor="end" class="copyright">Binary Structure Visualization</text>')
-    
-    svg_parts.append('</svg>')
-    
-    return ''.join(svg_parts)
+            y_cursor += hex_row_h
 
-
-def format_field_value(item):
-    """Format field values for display."""
-    value = item['value']
+    # --- 5. RENDER PARSED TREE & FUNNELS ---
     
-    if isinstance(value, bytes):
-        if len(value) <= 6:
-            return ' '.join(f'{b:02X}' for b in value)
-        else:
-            return ' '.join(f'{b:02X}' for b in value[:6]) + '...'
-    elif isinstance(value, int):
-        if item['length'] and item['length'] == 1:
-            return f"{value}"
-        elif item['length'] and item['length'] == 2:
-            return f"{value} (0x{value:04X})"
-        elif item['length'] and item['length'] == 4:
-            return f"{value} (0x{value:08X})"
-        else:
-            return str(value)
-    elif isinstance(value, str):
-        if len(value) > 20:
-            return value[:20] + '...'
-        return value
-    elif isinstance(value, (dict, Container)):
-        return f"[{len(value)} fields]"
-    else:
-        return str(value)[:30]
-
-
-def create_compact_svg(flattened_data: List[Dict[str, Any]], 
-                                raw_data: bytes,
-                                struct_name: str = "Binary Structure",
-                                width: int = 800,
-                                height: int = 600) -> str:
-    """
-    Create a more compact GIF-style visualization suitable for embedding.
-    """
+    y_cursor = margin_y
     
-    items_with_offsets = [item for item in flattened_data if item['start'] is not None]
-    
-    svg_parts = []
-    svg_parts.append(f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">')
-    
-    # Styles
-    svg_parts.append('''
-    <defs>
-        <style>
-            .struct-name { font: bold 32px Arial; }
-            .orange { fill: #FF6600; }
-            .field-name { font: 12px monospace; fill: #FF0066; }
-            .field-value { font: 12px monospace; fill: #0066FF; }
-            .hex-text { font: 11px monospace; }
-            .section { font: bold 16px Arial; }
-            .line { stroke: #333; stroke-width: 1.5; fill: none; }
-        </style>
-    </defs>
-    <rect width="100%" height="100%" fill="white"/>
-    ''')
-    
-    # Title with alternating colors
-    words = struct_name.upper().split()
-    x = 20
-    for i, word in enumerate(words):
-        color = "orange" if i % 2 == 0 else ""
-        svg_parts.append(f'<text x="{x}" y="40" class="struct-name {color}">{word}</text>')
-        x += len(word) * 20 + 10
-    
-    # Simplified hex view
-    hex_y = 80
-    svg_parts.append(f'<rect x="20" y="{hex_y}" width="300" height="150" stroke="#333" stroke-width="2" fill="white"/>')
-    
-    # Show first few bytes
-    for row in range(min(6, len(raw_data) // 16 + 1)):
-        y = hex_y + 25 + row * 20
-        offset = row * 16
-        svg_parts.append(f'<text x="30" y="{y}" class="hex-text">{offset:02X}:</text>')
+    for f_idx, field in enumerate(flattened_data):
+        field_color = palette[f_idx % len(palette)]
         
-        for col in range(min(16, len(raw_data) - offset)):
-            x = 70 + col * 18
-            byte_val = raw_data[offset + col]
+        display_name = field['name'].split('.')[-1]
+        display_name = html.escape(display_name)
+        
+        # Prepare Condensed Value
+        val_str = format_value_condensed(field['value'])
+        val_str = html.escape(val_str)
+        
+        # 1. Render Field Name
+        svg.append(f'<text x="{x_tree_name}" y="{y_cursor}" class="field-name" fill="{field_color}">{display_name}</text>')
+        
+        # 2. Render Field Value (Processed Info)
+        if val_str:
+             svg.append(f'<text x="{x_tree_value}" y="{y_cursor}" class="field-value">{val_str}</text>')
+        
+        # --- FUNNEL LOGIC ---
+        if field['start'] is not None:
+            start_y = margin_y
+            if field['start'] in byte_row_map:
+                start_y = byte_row_map[field['start']]
             
-            # Color based on field
-            color = "#000"
-            for item in items_with_offsets:
-                if item['start'] <= offset + col < item['end']:
-                    # Generate color based on field name
-                    color = f"hsl({hash(item['name']) % 360}, 70%, 50%)"
-                    break
+            end_idx = field['end'] - 1
+            end_y = start_y
+            if end_idx in byte_row_map:
+                end_y = byte_row_map[end_idx]
             
-            svg_parts.append(f'<text x="{x}" y="{y}" class="hex-text" fill="{color}">{byte_val:02X}</text>')
-    
-    # Field descriptions with connecting lines
-    field_x = 380
-    field_y = hex_y + 20
-    
-    # Group by top-level
-    sections = {}
-    for item in items_with_offsets[:10]:  # Limit to first 10 items
-        section = item['name'].split('.')[0]
-        if section not in sections:
-            sections[section] = []
-        sections[section].append(item)
-    
-    for section, items in sections.items():
-        # Section header
-        svg_parts.append(f'<text x="{field_x}" y="{field_y}" class="section">{section.upper()}</text>')
-        field_y += 25
-        
-        # Draw connection line
-        svg_parts.append(f'<path d="M 320 {hex_y + 75} L 360 {hex_y + 75} L 360 {field_y - 20} L 370 {field_y - 20}" class="line"/>')
-        
-        for item in items:
-            name = item['name'].split('.')[-1]
-            value = str(item['value'])[:15]
-            if len(str(item['value'])) > 15:
-                value += "..."
+            bracket_x = x_funnel_start
+            mid_data_y = (start_y + end_y) / 2
             
-            svg_parts.append(f'<text x="{field_x}" y="{field_y}" class="field-name">{name}</text>')
-            svg_parts.append(f'<text x="{field_x + 100}" y="{field_y}" class="field-value">{html.escape(value)}</text>')
-            field_y += 18
-        
-        field_y += 15
-    
-    svg_parts.append('</svg>')
-    return ''.join(svg_parts)
+            svg.append(f'<path d="M {bracket_x} {start_y - 5} L {bracket_x} {end_y - 5}" stroke="{field_color}" class="funnel-line" />')
+            
+            text_x = x_tree_name - 10
+            text_y = y_cursor - 5
+            
+            cx1 = bracket_x + 40
+            cx2 = text_x - 40
+            
+            path = f"M {bracket_x} {mid_data_y - 5} C {cx1} {mid_data_y - 5}, {cx2} {text_y}, {text_x} {text_y}"
+            svg.append(f'<path d="{path}" stroke="{field_color}" class="connector" />')
+            
+            svg.append(f'<circle cx="{bracket_x}" cy="{mid_data_y - 5}" r="2" fill="{field_color}" />')
 
+        y_cursor += field_row_h
+
+    svg.append('</svg>')
+    return "\n".join(svg)

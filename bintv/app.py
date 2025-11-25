@@ -181,9 +181,13 @@ class BintvApp(App):
 
     def action_export(self):
         if self._flattened_construct_data and self.data:
-            filename = f"binteractiview_{self.target.replace('.', '').replace('/', '')}.svg"
+            # FIX: Convert Path to string before replacing
+            safe_name = str(self.target).replace(os.sep, '_').replace('.', '_')
+            filename = f"binteractiview_{safe_name}.svg"
+            
             with open(filename, "w") as f:
-                f.write(create_svg(self._flattened_construct_data, self.data, title=f"{self.target.split('.')[-2].replace('/', '')}"))
+                # Use generate_text_colors for SVG (Bright text on dark bg)
+                f.write(create_svg(self._flattened_construct_data, self.data, title=f"{safe_name}"))
             self.log_message(f"Exported to {filename}")
 
     def action_toggle_log(self):
@@ -213,7 +217,7 @@ class BintvApp(App):
         """Save the modified binary data to /tmp directory."""
         try:
             # Generate filename based on original file
-            base_name = os.path.basename(self.target)
+            base_name = os.path.basename(str(self.target))
             name, ext = os.path.splitext(base_name)
             output_path = f"/tmp/{name}_modified{ext}"
             
@@ -329,7 +333,13 @@ class BintvApp(App):
             self._parsed_data = self._construct.parse(self.data)
             self.query_one("#construct-tree").parsed_data = self._parsed_data
             self._flattened_construct_data = self.flatten_construct_offsets()
-            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (self._flattened_construct_data, neon_background_colors(len(self._flattened_construct_data)))
+            
+            # FIX: Use background colors (Dark) for TUI so white text is readable
+            self.query_one(f"#hex-pane-{self.pane_count}-hex-view").elements = (
+                self._flattened_construct_data, 
+                neon_background_colors(len(self._flattened_construct_data))
+            )
+            
             self.log_message(f"Successfully parsed {len(self._flattened_construct_data)} fields")
         except Exception as e:
             self.log_message(f"Parse error: {str(e)}", level="error")
@@ -482,3 +492,4 @@ class BintvApp(App):
         hex_view.post_message(HexView.CursorUpdate(hex_view.id, msg.offset))
         
         self.log_message(f"Jumped to offset 0x{msg.offset:04x}")
+
