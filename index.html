@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BinTV Web - Binary Structure Viewer</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+        
+        body {
+            margin: 0;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            background: #0d1117;
+            color: #c9d1d9;
+            overflow: hidden;
+        }
+        
+        .terminal-border {
+            border: 1px solid #30363d;
+            box-shadow: 0 0 10px rgba(48, 54, 61, 0.3);
+        }
+        
+        .terminal-glow {
+            text-shadow: 0 0 2px rgba(88, 166, 255, 0.3);
+        }
+        
+        .hex-cell {
+            display: inline-block;
+            padding: 2px 4px;
+            margin: 0;
+            cursor: pointer;
+            transition: all 0.15s;
+            color: #8b949e;
+            background: rgba(110, 118, 129, 0.05);
+            font-size: 14px;
+        }
+        
+        .hex-cell:hover {
+            background: rgba(88, 166, 255, 0.2);
+            color: #58a6ff;
+        }
+        
+        .hex-offset {
+            color: #58a6ff;
+            font-weight: 600;
+            user-select: none;
+            display: inline-block;
+            width: 100px;
+            font-size: 14px;
+        }
+        
+        .ascii-char {
+            display: inline-block;
+            width: 1ch;
+            text-align: center;
+            color: #8b949e;
+            opacity: 0.8;
+            padding: 2px 1px;
+            font-size: 14px;
+            transition: all 0.15s;
+        }
+        
+        .field-highlight-0 { 
+            background: rgba(248, 81, 73, 0.4); 
+            box-shadow: 0 0 8px rgba(248, 81, 73, 0.6), inset 0 0 4px rgba(248, 81, 73, 0.3);
+            color: #ff9b97 !important;
+        }
+        .field-highlight-1 { 
+            background: rgba(246, 173, 85, 0.4); 
+            box-shadow: 0 0 8px rgba(246, 173, 85, 0.6), inset 0 0 4px rgba(246, 173, 85, 0.3);
+            color: #ffc98e !important;
+        }
+        .field-highlight-2 { 
+            background: rgba(87, 171, 90, 0.4); 
+            box-shadow: 0 0 8px rgba(87, 171, 90, 0.6), inset 0 0 4px rgba(87, 171, 90, 0.3);
+            color: #a0e3a3 !important;
+        }
+        .field-highlight-3 { 
+            background: rgba(88, 166, 255, 0.4); 
+            box-shadow: 0 0 8px rgba(88, 166, 255, 0.6), inset 0 0 4px rgba(88, 166, 255, 0.3);
+            color: #a8d4ff !important;
+        }
+        .field-highlight-4 { 
+            background: rgba(188, 128, 240, 0.4); 
+            box-shadow: 0 0 8px rgba(188, 128, 240, 0.6), inset 0 0 4px rgba(188, 128, 240, 0.3);
+            color: #d4b3ff !important;
+        }
+        .field-highlight-5 { 
+            background: rgba(255, 121, 198, 0.4); 
+            box-shadow: 0 0 8px rgba(255, 121, 198, 0.6), inset 0 0 4px rgba(255, 121, 198, 0.3);
+            color: #ffa3d9 !important;
+        }
+        .field-highlight-6 { 
+            background: rgba(121, 192, 255, 0.4); 
+            box-shadow: 0 0 8px rgba(121, 192, 255, 0.6), inset 0 0 4px rgba(121, 192, 255, 0.3);
+            color: #b3d9ff !important;
+        }
+        .field-highlight-7 { 
+            background: rgba(255, 158, 100, 0.4); 
+            box-shadow: 0 0 8px rgba(255, 158, 100, 0.6), inset 0 0 4px rgba(255, 158, 100, 0.3);
+            color: #ffb380 !important;
+        }
+        
+        .tree-node {
+            cursor: pointer;
+            padding: 4px 6px;
+            margin: 2px 0;
+            transition: all 0.15s;
+            user-select: none;
+            border-left: 2px solid transparent;
+            color: #c9d1d9;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .tree-node:hover {
+            background: rgba(88, 166, 255, 0.1);
+            border-left: 2px solid #58a6ff;
+        }
+        
+        .tree-node:hover .edit-btn {
+            opacity: 1;
+        }
+        
+        .tree-node.selected {
+            background: rgba(88, 166, 255, 0.15);
+            border-left: 2px solid #58a6ff;
+        }
+
+        .tree-node.expandable::before {
+            content: '▶';
+            display: inline-block;
+            margin-right: 4px;
+            transition: transform 0.2s;
+            color: #58a6ff;
+        }
+
+        .tree-node.expandable.expanded::before {
+            transform: rotate(90deg);
+        }
+        
+        .edit-btn {
+            opacity: 0;
+            transition: opacity 0.2s;
+            padding: 2px 6px;
+            font-size: 11px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #58a6ff;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .edit-btn:hover {
+            background: #30363d;
+            border-color: #58a6ff;
+        }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+        
+        .modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 20px;
+            min-width: 400px;
+            max-width: 600px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+        
+        .modal-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+        }
+        
+        .modal-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: rgba(110, 118, 129, 0.1);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: rgba(88, 166, 255, 0.3);
+            border-radius: 3px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: rgba(88, 166, 255, 0.5);
+        }
+
+        .code-editor {
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            background: #0d1117;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            font-size: 13px;
+        }
+
+        .btn-terminal {
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #58a6ff;
+            transition: all 0.2s;
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .btn-terminal:hover:not(:disabled) {
+            background: #30363d;
+            border-color: #58a6ff;
+        }
+
+        .btn-terminal:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .hex-line {
+            display: flex;
+            align-items: center;
+            margin: 0;
+            padding: 2px 0;
+            transition: background 0.1s;
+            white-space: nowrap;
+        }
+
+        .hex-line:hover {
+            background: rgba(110, 118, 129, 0.05);
+        }
+
+        .loading-spinner {
+            border: 2px solid rgba(88, 166, 255, 0.2);
+            border-top: 2px solid #58a6ff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-box {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.3);
+            box-shadow: 0 0 5px rgba(248, 81, 73, 0.1);
+            padding: 8px;
+            margin: 8px 0;
+            color: #ff7b72;
+            font-size: 12px;
+        }
+
+        .tree-children {
+            margin-left: 15px;
+            border-left: 1px solid rgba(88, 166, 255, 0.2);
+            padding-left: 8px;
+        }
+        
+        .terminal-title {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 10px;
+            color: #58a6ff;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .blink {
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        
+        .panel {
+            background: #0d1117;
+            border: 1px solid #30363d;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // Utility functions
+        const formatHex = (byte) => byte.toString(16).padStart(2, '0').toUpperCase();
+        
+        const formatAscii = (byte) => {
+            return (byte >= 32 && byte <= 126) ? String.fromCharCode(byte) : '.';
+        };
+
+        // Python/Construct integration
+        let pyodide = null;
+        let pyodideReady = false;
+
+        const initPyodide = async () => {
+            if (pyodideReady) return pyodide;
+            
+            console.log('Loading Pyodide...');
+            pyodide = await loadPyodide({
+                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+            });
+            
+            console.log('Installing construct...');
+            await pyodide.loadPackage(['micropip']);
+            const micropip = pyodide.pyimport('micropip');
+            await micropip.install('construct');
+            
+            console.log('Pyodide ready!');
+            pyodideReady = true;
+            return pyodide;
+        };
+
+        const parseWithConstruct = async (data, structCode) => {
+            if (!pyodideReady) {
+                throw new Error('Pyodide not ready');
+            }
+
+            console.log('parseWithConstruct called with data length:', data.length);
+            console.log('Struct code:', structCode);
+
+            try {
+                // Convert Uint8Array to Python bytes properly
+                const dataArray = Array.from(data);
+                console.log('Converted to array, length:', dataArray.length);
+                
+                const dataBytes = pyodide.toPy(dataArray);
+                console.log('Created Python object');
+                
+                // Create Python code to parse the structure
+                const pythonCode = `
+import json
+from construct import *
+
+# Store the built-in construct names before user code
+_builtin_constructs = set(dir())
+
+# User's structure definition
+${structCode}
+
+# Get new names added by user code
+_user_constructs = set(dir()) - _builtin_constructs
+
+# Parse the data
+def parse_structure(data_list):
+    try:
+        # Convert list to bytes
+        data_bytes = bytes(data_list)
+        print(f"Data bytes length: {len(data_bytes)}")
+        
+        # Try to find a Struct/Construct object defined by the user
+        struct_obj = None
+        
+        # First, try common naming conventions
+        for name in ['format_struct', 'struct', 'format', 'packet', 'header']:
+            if name in globals() and isinstance(globals()[name], Construct):
+                struct_obj = globals()[name]
+                print(f"Found structure by name: {name}")
+                break
+        
+        # If not found, look in user-defined constructs
+        if struct_obj is None:
+            for name in _user_constructs:
+                obj = globals().get(name)
+                if isinstance(obj, Construct) and isinstance(obj, Struct):
+                    struct_obj = obj
+                    print(f"Found user structure: {name}")
+                    break
+        
+        if struct_obj is None:
+            return {"error": "No Construct structure found. Define a structure (e.g., format_struct = Struct(...))"}
+        
+        # Parse the data
+        print("Parsing data...")
+        parsed = struct_obj.parse(data_bytes)
+        print(f"Parse complete, result type: {type(parsed)}")
+        print(f"Parsed container: {parsed}")
+        
+        # Convert to JSON-serializable format
+        def to_dict(obj, offset=0):
+            if isinstance(obj, Container):
+                result = []
+                current_offset = offset
+                
+                for key, value in obj.items():
+                    if key.startswith('_'):
+                        continue
+                    
+                    print(f"Processing field: {key} = {repr(value)[:100]}")
+                    
+                    # Try to get the size
+                    size = 0
+                    if isinstance(value, (bytes, bytearray)):
+                        size = len(value)
+                    elif isinstance(value, int):
+                        # Guess size based on value
+                        if value < 256:
+                            size = 1
+                        elif value < 65536:
+                            size = 2
+                        elif value < 4294967296:
+                            size = 4
+                        else:
+                            size = 8
+                    elif isinstance(value, str):
+                        size = len(value.encode())
+                    elif isinstance(value, Container):
+                        # Recursive structure
+                        child_result = to_dict(value, current_offset)
+                        total_size = sum(c.get('length', 0) for c in child_result)
+                        result.append({
+                            'name': key,
+                            'value': None,
+                            'offset': current_offset,
+                            'length': total_size,
+                            'children': child_result
+                        })
+                        current_offset += total_size
+                        continue
+                    
+                    # Format value for display
+                    if isinstance(value, bytes):
+                        display_value = value.hex().upper() if len(value) <= 16 else f"{value[:8].hex().upper()}... ({len(value)} bytes)"
+                    elif isinstance(value, int):
+                        if size == 1:
+                            display_value = f"0x{value:02X} ({value})"
+                        elif size == 2:
+                            display_value = f"0x{value:04X} ({value})"
+                        elif size == 4:
+                            display_value = f"0x{value:08X} ({value})"
+                        else:
+                            display_value = f"0x{value:X} ({value})"
+                    elif isinstance(value, str):
+                        display_value = f'"{value}"'
+                    else:
+                        display_value = str(value)
+                    
+                    result.append({
+                        'name': key,
+                        'value': display_value,
+                        'offset': current_offset,
+                        'length': size,
+                        'rawValue': value if isinstance(value, (int, str, bool, type(None))) else None
+                    })
+                    current_offset += size
+                
+                print(f"Converted {len(result)} fields")
+                return result
+            else:
+                print(f"WARNING: Parsed result is not a Container, it's {type(obj)}")
+                return []
+        
+        result = to_dict(parsed, 0)
+        return {"fields": result}
+        
+    except Exception as e:
+        import traceback
+        print(f"Error: {e}")
+        print(traceback.format_exc())
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+# Execute parsing
+result = parse_structure(data_list)
+json.dumps(result)
+`;
+
+                // Set the data in Python environment
+                pyodide.globals.set('data_list', dataBytes);
+                console.log('Set data_list in Python globals');
+                
+                // Run the code
+                console.log('Running Python code...');
+                const result = await pyodide.runPythonAsync(pythonCode);
+                console.log('Python execution complete, result:', result);
+                
+                const parsed = JSON.parse(result);
+                console.log('Parsed JSON:', parsed);
+                
+                if (parsed.error) {
+                    throw new Error(parsed.error + '\n' + (parsed.traceback || ''));
+                }
+                
+                return parsed.fields || [];
+                
+            } catch (error) {
+                console.error('Parse error:', error);
+                throw error;
+            }
+        };
+
+        // Hex View Component with Virtual Scrolling
+        const HexView = ({ data, highlightRanges = [], onByteClick, selectedField }) => {
+            const [scrollTop, setScrollTop] = useState(0);
+            const containerRef = useRef(null);
+            
+            const bytesPerLine = 16;
+            const lineHeight = 24; // pixels per line
+            const overscan = 10; // render extra lines above/below viewport
+            
+            const totalLines = Math.ceil(data.length / bytesPerLine);
+            const totalHeight = totalLines * lineHeight;
+            
+            // Calculate visible range
+            const containerHeight = containerRef.current?.clientHeight || 600;
+            const visibleLines = Math.ceil(containerHeight / lineHeight);
+            const startLine = Math.max(0, Math.floor(scrollTop / lineHeight) - overscan);
+            const endLine = Math.min(totalLines, startLine + visibleLines + overscan * 2);
+            
+            const handleScroll = (e) => {
+                setScrollTop(e.target.scrollTop);
+            };
+
+            const getHighlightClass = (byteIndex) => {
+                for (let i = 0; i < highlightRanges.length; i++) {
+                    const range = highlightRanges[i];
+                    if (byteIndex >= range.offset && byteIndex < range.offset + range.length) {
+                        return `field-highlight-${i % 8}`;
+                    }
+                }
+                return '';
+            };
+            
+            // Only render visible lines
+            const visibleLineElements = [];
+            for (let lineIdx = startLine; lineIdx < endLine; lineIdx++) {
+                const offset = lineIdx * bytesPerLine;
+                const lineData = data.slice(offset, Math.min(offset + bytesPerLine, data.length));
+                const y = lineIdx * lineHeight;
+                
+                visibleLineElements.push(
+                    <div 
+                        key={lineIdx} 
+                        className="hex-line" 
+                        style={{ 
+                            position: 'absolute', 
+                            top: `${y}px`,
+                            left: 0,
+                            right: 0,
+                            height: `${lineHeight}px`
+                        }}
+                    >
+                        <span className="hex-offset">
+                            {offset.toString(16).padStart(8, '0').toUpperCase()}
+                        </span>
+                        <span className="mx-4">
+                            {Array.from(lineData).map((byte, byteIdx) => {
+                                const globalIdx = offset + byteIdx;
+                                const highlightClass = getHighlightClass(globalIdx);
+                                return (
+                                    <span
+                                        key={byteIdx}
+                                        className={`hex-cell ${highlightClass}`}
+                                        onClick={() => onByteClick && onByteClick(globalIdx)}
+                                        title={`Offset: 0x${globalIdx.toString(16)}, Value: 0x${formatHex(byte)} (${byte})`}
+                                    >
+                                        {formatHex(byte)}
+                                    </span>
+                                );
+                            })}
+                            {Array(bytesPerLine - lineData.length).fill(0).map((_, i) => (
+                                <span key={`pad-${i}`} className="hex-cell opacity-30">··</span>
+                            ))}
+                        </span>
+                        <span className="ml-4 border-l border-gray-700 pl-4">
+                            {Array.from(lineData).map((byte, byteIdx) => {
+                                const globalIdx = offset + byteIdx;
+                                const highlightClass = getHighlightClass(globalIdx);
+                                return (
+                                    <span 
+                                        key={byteIdx} 
+                                        className={`ascii-char ${highlightClass}`}
+                                        title={`Offset: 0x${globalIdx.toString(16)}`}
+                                    >
+                                        {formatAscii(byte)}
+                                    </span>
+                                );
+                            })}
+                        </span>
+                    </div>
+                );
+            }
+
+            return (
+                <div 
+                    ref={containerRef}
+                    className="font-mono text-sm"
+                    style={{ 
+                        height: '100%', 
+                        overflow: 'auto',
+                        position: 'relative'
+                    }}
+                    onScroll={handleScroll}
+                >
+                    <div style={{ height: `${totalHeight}px`, position: 'relative' }}>
+                        {visibleLineElements}
+                    </div>
+                </div>
+            );
+        };
+
+        // Edit Modal Component
+        const EditModal = ({ field, onClose, onSave }) => {
+            const [value, setValue] = useState('');
+            const [error, setError] = useState('');
+            
+            useEffect(() => {
+                // Set initial value based on field type
+                if (field.rawValue !== null && field.rawValue !== undefined) {
+                    setValue(field.rawValue.toString());
+                } else if (field.value) {
+                    // Extract value from display string
+                    const match = field.value.match(/0x([0-9A-F]+)/);
+                    if (match) {
+                        setValue(match[1]);
+                    } else {
+                        setValue(field.value.replace(/['"]/g, ''));
+                    }
+                }
+            }, [field]);
+            
+            const handleSave = () => {
+                setError('');
+                
+                try {
+                    let newBytes;
+                    
+                    // Determine field type and convert value
+                    if (field.length === 1) {
+                        // Single byte (Int8)
+                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                        if (isNaN(val) || val < 0 || val > 255) {
+                            throw new Error('Value must be between 0 and 255');
+                        }
+                        newBytes = new Uint8Array([val]);
+                    } else if (field.length === 2) {
+                        // 2 bytes (Int16)
+                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                        if (isNaN(val) || val < 0 || val > 65535) {
+                            throw new Error('Value must be between 0 and 65535');
+                        }
+                        // Little endian
+                        newBytes = new Uint8Array([val & 0xFF, (val >> 8) & 0xFF]);
+                    } else if (field.length === 4) {
+                        // 4 bytes (Int32)
+                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                        if (isNaN(val) || val < 0 || val > 4294967295) {
+                            throw new Error('Value must be between 0 and 4294967295');
+                        }
+                        // Little endian
+                        newBytes = new Uint8Array([
+                            val & 0xFF,
+                            (val >> 8) & 0xFF,
+                            (val >> 16) & 0xFF,
+                            (val >> 24) & 0xFF
+                        ]);
+                    } else {
+                        // Bytes or string
+                        if (value.match(/^[0-9A-Fa-f\s]+$/)) {
+                            // Hex string
+                            const hexStr = value.replace(/\s/g, '');
+                            if (hexStr.length !== field.length * 2) {
+                                throw new Error(`Hex string must be ${field.length * 2} characters (${field.length} bytes)`);
+                            }
+                            newBytes = new Uint8Array(field.length);
+                            for (let i = 0; i < field.length; i++) {
+                                newBytes[i] = parseInt(hexStr.substr(i * 2, 2), 16);
+                            }
+                        } else {
+                            // ASCII string
+                            const encoder = new TextEncoder();
+                            const encoded = encoder.encode(value);
+                            if (encoded.length > field.length) {
+                                throw new Error(`String too long. Max ${field.length} bytes.`);
+                            }
+                            newBytes = new Uint8Array(field.length);
+                            newBytes.set(encoded);
+                        }
+                    }
+                    
+                    onSave(field.offset, newBytes);
+                    onClose();
+                } catch (err) {
+                    setError(err.message);
+                }
+            };
+            
+            const getInputHelp = () => {
+                if (field.length === 1) {
+                    return 'Enter decimal (0-255) or hex (0xFF)';
+                } else if (field.length === 2) {
+                    return 'Enter decimal (0-65535) or hex (0xFFFF)';
+                } else if (field.length === 4) {
+                    return 'Enter decimal or hex (0xFFFFFFFF)';
+                } else {
+                    return 'Enter hex bytes (e.g., "DEADBEEF") or ASCII string';
+                }
+            };
+            
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <h2 className="text-lg font-semibold mb-4" style={{ color: '#58a6ff' }}>
+                            Edit Field: {field.name}
+                        </h2>
+                        
+                        <div className="mb-4">
+                            <div className="text-sm mb-2" style={{ color: '#8b949e' }}>
+                                <div>Offset: 0x{field.offset.toString(16).padStart(4, '0')}</div>
+                                <div>Size: {field.length} bytes</div>
+                                <div className="mt-1" style={{ color: '#6e7681', fontSize: '12px' }}>
+                                    {getInputHelp()}
+                                </div>
+                            </div>
+                            
+                            <input
+                                type="text"
+                                className="modal-input"
+                                value={value}
+                                onChange={(e) => setValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSave();
+                                    if (e.key === 'Escape') onClose();
+                                }}
+                                placeholder="Enter new value"
+                                autoFocus
+                            />
+                            
+                            {error && (
+                                <div className="mt-2 text-sm" style={{ color: '#ff7b72' }}>
+                                    {error}
+                                </div>
+                            )}
+                        </div>
+                        
+                        <div className="flex justify-end space-x-2">
+                            <button
+                                onClick={onClose}
+                                className="px-4 py-2 btn-terminal rounded"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleSave}
+                                className="px-4 py-2 rounded"
+                                style={{
+                                    background: '#238636',
+                                    border: '1px solid #2ea043',
+                                    color: '#fff'
+                                }}
+                            >
+                                Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Structure Tree Component
+        const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit }) => {
+            const [expanded, setExpanded] = useState(true);
+            const hasChildren = node.children && node.children.length > 0;
+            const isSelected = JSON.stringify(currentPath) === JSON.stringify(selectedPath);
+            const canEdit = !hasChildren && node.length > 0;
+            
+            return (
+                <div>
+                    <div
+                        className={`tree-node ${hasChildren ? 'expandable' : ''} ${expanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}`}
+                    >
+                        <div
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (hasChildren) {
+                                    setExpanded(!expanded);
+                                }
+                                onSelect(node, currentPath);
+                            }}
+                            style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="font-semibold text-blue-400">{node.name}</span>
+                                <span className="text-xs text-gray-500">
+                                    @0x{node.offset.toString(16).padStart(4, '0')} ({node.length} bytes)
+                                </span>
+                            </div>
+                            {node.value !== null && node.value !== undefined && (
+                                <div className="text-sm text-gray-300 mt-1 ml-4">
+                                    {node.value}
+                                </div>
+                            )}
+                        </div>
+                        
+                        {canEdit && (
+                            <button
+                                className="edit-btn ml-2"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onEdit(node);
+                                }}
+                                title="Edit field value"
+                            >
+                                ✏️ Edit
+                            </button>
+                        )}
+                    </div>
+                    {hasChildren && expanded && (
+                        <div className="tree-children">
+                            {node.children.map((child, idx) => (
+                                <TreeNode
+                                    key={idx}
+                                    node={child}
+                                    depth={depth + 1}
+                                    onSelect={onSelect}
+                                    selectedPath={selectedPath}
+                                    currentPath={[...currentPath, idx]}
+                                    onEdit={onEdit}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const StructureTree = ({ fields, onFieldSelect, selectedField, onFieldEdit }) => {
+            const [selectedPath, setSelectedPath] = useState(null);
+            
+            const handleSelect = (node, path) => {
+                setSelectedPath(path);
+                onFieldSelect(node);
+            };
+            
+            return (
+                <div className="space-y-1">
+                    {fields.length === 0 ? (
+                        <div className="text-gray-500 p-4 text-center">
+                            No structure parsed yet. Define a Construct structure and click Parse.
+                        </div>
+                    ) : (
+                        fields.map((field, idx) => (
+                            <TreeNode
+                                key={idx}
+                                node={field}
+                                onSelect={handleSelect}
+                                selectedPath={selectedPath}
+                                currentPath={[idx]}
+                                onEdit={onFieldEdit}
+                            />
+                        ))
+                    )}
+                </div>
+            );
+        };
+
+        // Main App Component
+        const BinTVApp = () => {
+            const [fileData, setFileData] = useState(null);
+            const [originalFileData, setOriginalFileData] = useState(null);
+            const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+            const [fileName, setFileName] = useState('');
+            const [structDef, setStructDef] = useState(`# Define your Construct structure here
+# Example:
+format_struct = Struct(
+    "magic" / Bytes(4),
+    "version" / Int16ul,
+    "size" / Int32ul,
+    "data" / Bytes(8),
+    "checksum" / Int32ul,
+)`);
+            const [parsedFields, setParsedFields] = useState([]);
+            const [selectedField, setSelectedField] = useState(null);
+            const [highlightRanges, setHighlightRanges] = useState([]);
+            const [isLoading, setIsLoading] = useState(true);
+            const [isParsing, setIsParsing] = useState(false);
+            const [error, setError] = useState(null);
+            const [parseStatus, setParseStatus] = useState('');
+            const [editingField, setEditingField] = useState(null);
+            const fileInputRef = useRef(null);
+            const parseTimeoutRef = useRef(null);
+
+            useEffect(() => {
+                initPyodide().then(() => {
+                    setIsLoading(false);
+                    setParseStatus('>>> Python environment ready');
+                }).catch(err => {
+                    setError('Failed to initialize Pyodide: ' + err.message);
+                    setIsLoading(false);
+                });
+            }, []);
+
+            // Reactive parsing with debounce
+            useEffect(() => {
+                if (!fileData || !pyodideReady) return;
+                
+                // Check if structDef has actual content (not just comments)
+                const hasRealContent = structDef.split('\n').some(line => {
+                    const trimmed = line.trim();
+                    return trimmed && !trimmed.startsWith('#');
+                });
+                
+                if (!hasRealContent) return;
+                
+                // Clear previous timeout
+                if (parseTimeoutRef.current) {
+                    clearTimeout(parseTimeoutRef.current);
+                }
+                
+                // Set new timeout for debounced parsing
+                parseTimeoutRef.current = setTimeout(() => {
+                    handleParse();
+                }, 500); // Parse 500ms after user stops typing
+                
+                return () => {
+                    if (parseTimeoutRef.current) {
+                        clearTimeout(parseTimeoutRef.current);
+                    }
+                };
+            }, [structDef, fileData, pyodideReady]);
+
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                setFileName(file.name);
+                setParseStatus(`>>> Loading file: ${file.name}`);
+                const reader = new FileReader();
+                
+                reader.onload = (e) => {
+                    const arrayBuffer = e.target.result;
+                    const uint8Array = new Uint8Array(arrayBuffer);
+                    setFileData(uint8Array);
+                    setOriginalFileData(new Uint8Array(uint8Array));
+                    setHasUnsavedChanges(false);
+                    setParseStatus(`>>> File loaded: ${uint8Array.length} bytes`);
+                };
+                
+                reader.readAsArrayBuffer(file);
+            };
+
+            const flattenFields = (fields, list = []) => {
+                fields.forEach(field => {
+                    list.push({
+                        offset: field.offset,
+                        length: field.length
+                    });
+                    if (field.children) {
+                        flattenFields(field.children, list);
+                    }
+                });
+                return list;
+            };
+
+            const handleParse = async () => {
+                if (!fileData || !pyodideReady) {
+                    console.log('Parse skipped: fileData=', !!fileData, 'pyodideReady=', pyodideReady);
+                    return;
+                }
+                
+                console.log('Starting parse with', fileData.length, 'bytes');
+                setIsParsing(true);
+                setError(null);
+                setParseStatus('>>> Parsing structure...');
+                
+                try {
+                    const fields = await parseWithConstruct(fileData, structDef);
+                    console.log('Parse result:', fields);
+                    setParsedFields(fields);
+                    setHighlightRanges(flattenFields(fields));
+                    setParseStatus(`>>> Parse complete: ${fields.length} fields`);
+                } catch (err) {
+                    console.error('Parse error:', err);
+                    setError(err.message);
+                    setParsedFields([]);
+                    setHighlightRanges([]);
+                    setParseStatus('>>> Parse error');
+                } finally {
+                    setIsParsing(false);
+                }
+            };
+
+            const handleFieldSelect = (field) => {
+                setSelectedField(field);
+            };
+            
+            const handleFieldEdit = (field) => {
+                setEditingField(field);
+            };
+            
+            const handleSaveEdit = (offset, newBytes) => {
+                // Create a new array with the edited bytes
+                const newData = new Uint8Array(fileData);
+                newData.set(newBytes, offset);
+                setFileData(newData);
+                setHasUnsavedChanges(true);
+                setParseStatus(`>>> Field edited at 0x${offset.toString(16)}`);
+                
+                // Re-parse to update the display
+                setTimeout(() => handleParse(), 100);
+            };
+            
+            const handleSaveFile = () => {
+                if (!fileData) return;
+                
+                const blob = new Blob([fileData], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName.replace(/(\.[^.]+)?$/, '_modified$1');
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                setHasUnsavedChanges(false);
+                setOriginalFileData(new Uint8Array(fileData));
+                setParseStatus('>>> File saved');
+            };
+            
+            const handleResetChanges = () => {
+                if (originalFileData) {
+                    setFileData(new Uint8Array(originalFileData));
+                    setHasUnsavedChanges(false);
+                    setParseStatus('>>> Changes reset');
+                    setTimeout(() => handleParse(), 100);
+                }
+            };
+
+            const handleExportSVG = () => {
+                if (!fileData || parsedFields.length === 0) {
+                    alert('Please load a file and parse it first!');
+                    return;
+                }
+                
+                // Generate SVG
+                const svg = generateSVG(fileData, parsedFields);
+                
+                // Create blob and download
+                const blob = new Blob([svg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${fileName}_structure.svg`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                setParseStatus('>>> SVG exported successfully');
+            };
+            
+            const generateSVG = (data, fields) => {
+                const bytesPerLine = 16;
+                const lineHeight = 20;
+                const charWidth = 10;
+                const offsetWidth = 100;
+                const hexWidth = bytesPerLine * charWidth * 3;
+                const margin = 20;
+                const headerHeight = 60;
+                
+                // Calculate SVG dimensions
+                const numLines = Math.ceil(data.length / bytesPerLine);
+                const hexViewHeight = numLines * lineHeight + headerHeight;
+                const legendHeight = fields.length * 25 + 40;
+                const totalHeight = hexViewHeight + legendHeight + margin * 3;
+                const totalWidth = offsetWidth + hexWidth + margin * 4;
+                
+                // Color palette
+                const colors = [
+                    '#f85149', '#f6ad55', '#57ab5a', '#58a6ff',
+                    '#bc80f0', '#ff79c6', '#79c0ff', '#ff9e64'
+                ];
+                
+                let svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${totalWidth}" height="${totalHeight}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      text { font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px; }
+      .offset { fill: #58a6ff; font-weight: 600; }
+      .hex { fill: #8b949e; }
+      .title { fill: #c9d1d9; font-size: 18px; font-weight: 600; }
+      .subtitle { fill: #8b949e; font-size: 12px; }
+      .field-name { fill: #c9d1d9; font-weight: 500; }
+      .field-value { fill: #8b949e; font-size: 11px; }
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="${totalWidth}" height="${totalHeight}" fill="#0d1117"/>
+  
+  <!-- Header -->
+  <text x="${margin}" y="${margin + 20}" class="title">Binary Structure Visualization</text>
+  <text x="${margin}" y="${margin + 38}" class="subtitle">File: ${fileName} (${data.length} bytes)</text>
+  
+  <!-- Hex Dump -->
+  <g transform="translate(${margin}, ${headerHeight})">
+`;
+                
+                // Draw hex dump with highlights
+                for (let i = 0; i < data.length; i += bytesPerLine) {
+                    const lineNum = Math.floor(i / bytesPerLine);
+                    const y = lineNum * lineHeight + 20;
+                    
+                    // Offset
+                    svg += `    <text x="0" y="${y}" class="offset">${i.toString(16).padStart(8, '0').toUpperCase()}</text>\n`;
+                    
+                    // Hex bytes
+                    for (let j = 0; j < bytesPerLine && i + j < data.length; j++) {
+                        const byte = data[i + j];
+                        const x = offsetWidth + j * charWidth * 3;
+                        const byteIndex = i + j;
+                        
+                        // Find which field this byte belongs to
+                        let fieldColor = null;
+                        let fieldIndex = -1;
+                        const checkFields = (flds, idx = 0) => {
+                            for (let f = 0; f < flds.length; f++) {
+                                const field = flds[f];
+                                if (byteIndex >= field.offset && byteIndex < field.offset + field.length) {
+                                    fieldColor = colors[(idx + f) % colors.length];
+                                    fieldIndex = idx + f;
+                                    return true;
+                                }
+                                if (field.children) {
+                                    if (checkFields(field.children, idx + f + 1)) return true;
+                                }
+                            }
+                            return false;
+                        };
+                        checkFields(fields);
+                        
+                        if (fieldColor) {
+                            svg += `    <rect x="${x - 2}" y="${y - 14}" width="${charWidth * 2.5}" height="16" fill="${fieldColor}" opacity="0.3" rx="2"/>\n`;
+                        }
+                        
+                        svg += `    <text x="${x}" y="${y}" class="hex">${byte.toString(16).padStart(2, '0').toUpperCase()}</text>\n`;
+                    }
+                }
+                
+                svg += `  </g>\n`;
+                
+                // Legend
+                const legendY = hexViewHeight + margin * 2;
+                svg += `  <g transform="translate(${margin}, ${legendY})">
+    <text x="0" y="0" class="title" font-size="14">Parsed Fields</text>
+`;
+                
+                const flatFields = [];
+                const flatten = (flds, depth = 0) => {
+                    flds.forEach((f, idx) => {
+                        flatFields.push({ ...f, depth, colorIdx: flatFields.length });
+                        if (f.children) flatten(f.children, depth + 1);
+                    });
+                };
+                flatten(fields);
+                
+                flatFields.forEach((field, idx) => {
+                    const y = (idx + 1) * 25 + 10;
+                    const color = colors[field.colorIdx % colors.length];
+                    const indent = field.depth * 15;
+                    
+                    svg += `    <rect x="${indent}" y="${y - 12}" width="12" height="12" fill="${color}" opacity="0.6" rx="2"/>\n`;
+                    svg += `    <text x="${indent + 18}" y="${y}" class="field-name">${field.name}</text>\n`;
+                    svg += `    <text x="${indent + 200}" y="${y}" class="field-value">@0x${field.offset.toString(16).padStart(4, '0')} (${field.length} bytes)</text>\n`;
+                    if (field.value) {
+                        svg += `    <text x="${indent + 350}" y="${y}" class="field-value">${field.value.length > 40 ? field.value.substring(0, 40) + '...' : field.value}</text>\n`;
+                    }
+                });
+                
+                svg += `  </g>\n`;
+                svg += `</svg>`;
+                
+                return svg;
+            };
+
+            const loadSampleFile = () => {
+                // Create a sample binary file (ZIP header-like)
+                // 4 + 2 + 2 + 4 + 8 + 4 = 24 bytes total
+                const sample = new Uint8Array([
+                    0x50, 0x4B, 0x03, 0x04,                         // Magic: PK (ZIP signature) - 4 bytes
+                    0x14, 0x00,                                     // Version: 20 (0x0014) - 2 bytes  
+                    0x00, 0x00,                                     // Flags: 0 - 2 bytes
+                    0x08, 0x00, 0x00, 0x00,                         // Size: 8 - 4 bytes
+                    0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x57, 0x6F, // Data: "Hello Wo" - 8 bytes
+                    0xDE, 0xAD, 0xBE, 0xEF                          // Checksum: 0xEFBEADDE - 4 bytes
+                ]);
+                
+                setFileData(sample);
+                setOriginalFileData(new Uint8Array(sample));
+                setHasUnsavedChanges(false);
+                setFileName('sample.bin');
+                setParseStatus(`>>> Sample loaded: ${sample.length} bytes`);
+                
+                // Set sample structure
+                setStructDef(`# Sample ZIP-like structure
+format_struct = Struct(
+    "magic" / Bytes(4),
+    "version" / Int16ul,
+    "flags" / Int16ul,
+    "size" / Int32ul,
+    "data" / Bytes(8),
+    "checksum" / Int32ul,
+)`);
+            };
+
+            if (isLoading) {
+                return (
+                    <div className="h-screen flex items-center justify-center" style={{ background: '#0d1117' }}>
+                        <div className="text-center">
+                            <div className="loading-spinner mx-auto mb-4"></div>
+                            <h2 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>Initializing Python Environment</h2>
+                            <p className="mt-2 text-base" style={{ color: '#8b949e' }}>Loading Pyodide and Construct library...</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="h-screen flex flex-col" style={{ background: '#0d1117' }}>
+                    {editingField && (
+                        <EditModal
+                            field={editingField}
+                            onClose={() => setEditingField(null)}
+                            onSave={handleSaveEdit}
+                        />
+                    )}
+                    
+                    {/* Header */}
+                    <header className="terminal-border p-4" style={{ background: '#161b22' }}>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-4">
+                                <h1 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>
+                                    BinTV
+                                </h1>
+                                <span className="text-sm opacity-70">Binary Structure Viewer v1.0</span>
+                                {hasUnsavedChanges && (
+                                    <span className="text-sm px-2 py-1 rounded" style={{ background: '#f6ad55', color: '#000' }}>
+                                        • Modified
+                                    </span>
+                                )}
+                            </div>
+                            
+                            <div className="flex items-center space-x-2">
+                                <button
+                                    onClick={loadSampleFile}
+                                    disabled={isLoading}
+                                    className="px-4 py-2 btn-terminal rounded"
+                                >
+                                    Sample
+                                </button>
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    onChange={handleFileUpload}
+                                    accept="*"
+                                />
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isLoading}
+                                    className="px-4 py-2 btn-terminal rounded"
+                                >
+                                    Open File
+                                </button>
+                                {hasUnsavedChanges && (
+                                    <>
+                                        <button
+                                            onClick={handleResetChanges}
+                                            className="px-4 py-2 btn-terminal rounded"
+                                            title="Reset all changes"
+                                        >
+                                            Reset
+                                        </button>
+                                        <button
+                                            onClick={handleSaveFile}
+                                            className="px-4 py-2 rounded"
+                                            style={{
+                                                background: '#238636',
+                                                border: '1px solid #2ea043',
+                                                color: '#fff'
+                                            }}
+                                            title="Save modified file"
+                                        >
+                                            Save File
+                                        </button>
+                                    </>
+                                )}
+                                <button
+                                    onClick={handleExportSVG}
+                                    disabled={!fileData || isLoading || parsedFields.length === 0}
+                                    className="px-4 py-2 btn-terminal rounded"
+                                >
+                                    Export SVG
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-2 text-sm flex items-center justify-between">
+                            <div>
+                                {fileName && (
+                                    <>
+                                        <span style={{ color: '#58a6ff' }}>File:</span>
+                                        <span className="ml-2">{fileName}</span>
+                                        {fileData && (
+                                            <span className="ml-4">
+                                                <span style={{ color: '#58a6ff' }}>Size:</span>
+                                                <span className="ml-2">{fileData.length} bytes</span>
+                                            </span>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                {isParsing && (
+                                    <span style={{ color: '#f6ad55' }}>
+                                        Parsing...
+                                    </span>
+                                )}
+                                {parseStatus && !isParsing && (
+                                    <span className="opacity-70">{parseStatus}</span>
+                                )}
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <div className="flex-1 flex overflow-hidden">
+                        {/* Left Panel - Structure Editor */}
+                        <div className="w-1/3 flex flex-col panel" style={{ borderRight: '1px solid #30363d' }}>
+                            <div className="terminal-title flex items-center justify-between">
+                                <span>Construct Structure Definition</span>
+                                <div className="flex items-center space-x-2">
+                                    {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>Parsing...</span>}
+                                    <button
+                                        onClick={handleParse}
+                                        disabled={!fileData || !pyodideReady || isParsing}
+                                        className="px-3 py-1 btn-terminal rounded"
+                                        title="Manual parse (or auto-parses on edit)"
+                                    >
+                                        Parse
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div className="flex-1 flex flex-col">
+                                <textarea
+                                    value={structDef}
+                                    onChange={(e) => setStructDef(e.target.value)}
+                                    className="flex-1 p-3 font-mono resize-none focus:outline-none focus:ring-1"
+                                    style={{ 
+                                        background: '#0d1117',
+                                        color: '#c9d1d9',
+                                        lineHeight: '1.6',
+                                        border: 'none',
+                                        fontSize: '13px'
+                                    }}
+                                    placeholder="# Define Construct structure"
+                                    spellCheck={false}
+                                />
+                            </div>
+                            
+                            {error && (
+                                <div className="m-2 error-box rounded">
+                                    <div className="font-semibold mb-1" style={{ fontSize: '12px' }}>Parse Error:</div>
+                                    <pre className="whitespace-pre-wrap overflow-auto max-h-32" style={{ fontSize: '11px' }}>
+                                        {error}
+                                    </pre>
+                                </div>
+                            )}
+                            
+                            <div className="flex-1 overflow-hidden flex flex-col" style={{ borderTop: '1px solid #30363d' }}>
+                                <div className="terminal-title">
+                                    Parsed Structure ({parsedFields.length})
+                                </div>
+                                <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
+                                    <StructureTree
+                                        fields={parsedFields}
+                                        onFieldSelect={handleFieldSelect}
+                                        selectedField={selectedField}
+                                        onFieldEdit={handleFieldEdit}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Right Panel - Hex View */}
+                        <div className="flex-1 flex flex-col panel">
+                            <div className="terminal-title">
+                                Hex Dump
+                            </div>
+                            
+                            <div className="flex-1 overflow-hidden scrollbar-thin" style={{ background: '#0d1117' }}>
+                                {fileData ? (
+                                    <HexView
+                                        data={fileData}
+                                        highlightRanges={highlightRanges}
+                                        selectedField={selectedField}
+                                    />
+                                ) : (
+                                    <div className="h-full flex items-center justify-center">
+                                        <div className="text-center">
+                                            <div className="text-6xl mb-4" style={{ opacity: 0.3 }}>📁</div>
+                                            <h3 className="text-xl font-semibold mb-2" style={{ color: '#8b949e' }}>
+                                                No file loaded
+                                            </h3>
+                                            <p style={{ color: '#6e7681', fontSize: '15px' }}>
+                                                Click "Open File" or "Sample" to get started
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Footer */}
+                    <footer className="terminal-border p-2 text-center" style={{ background: '#161b22', opacity: 0.7, fontSize: '12px' }}>
+                        <span>BinTV • Binary Structure Viewer • Powered by Pyodide &amp; Construct</span>
+                    </footer>
+                </div>
+            );
+        };
+
+        // Render app
+        ReactDOM.render(<BinTVApp />, document.getElementById('root'));
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'o') {
+                e.preventDefault();
+                document.querySelector('input[type="file"]')?.click();
+            }
+        });
+    </script>
+</body>
+</html>
