@@ -646,21 +646,98 @@ json.dumps(result)
         const EditModal = ({ field, onClose, onSave }) => {
             const [value, setValue] = useState('');
             const [error, setError] = useState('');
+            const [inputMode, setInputMode] = useState('auto'); // 'hex' or 'int' or 'string' or 'auto'
             
             useEffect(() => {
-                // Set initial value based on field type
-                if (field.rawValue !== null && field.rawValue !== undefined) {
+                // Determine if this is a Bytes field (not an integer field)
+                // Check if the value display format indicates bytes (shows hex string without decimal)
+                const isBytesField = field.value && field.value.match(/^[0-9A-F]+$/) && field.length >= 4;
+                const isIntField = field.rawValue !== null && field.rawValue !== undefined && typeof field.rawValue === 'number';
+                
+                // Set initial value and mode based on field type
+                if (isIntField && field.length <= 4) {
+                    // Integer field (Int8, Int16, Int32)
                     setValue(field.rawValue.toString());
+                    setInputMode('int');
                 } else if (field.value) {
                     // Extract value from display string
-                    const match = field.value.match(/0x([0-9A-F]+)/);
+                    const match = field.value.match(/^([0-9A-F]+)/);
                     if (match) {
-                        setValue(match[1]);
+                        // Format with spaces for bytes
+                        const hexStr = match[1];
+                        let formatted = '';
+                        for (let i = 0; i < hexStr.length; i += 2) {
+                            if (i > 0) formatted += ' ';
+                            formatted += hexStr.substring(i, i + 2);
+                        }
+                        setValue(formatted);
+                        setInputMode('hex');
                     } else {
                         setValue(field.value.replace(/['"]/g, ''));
+                        setInputMode('string');
                     }
+                } else {
+                    setInputMode('hex');
+                }
+                
+                // For Bytes fields (4+ bytes that aren't integers), force hex mode
+                if (isBytesField || (field.length >= 4 && !isIntField)) {
+                    setInputMode('hex');
                 }
             }, [field]);
+            
+            const formatHexInput = (input) => {
+                // Remove all non-hex characters
+                let cleaned = input.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                
+                // Limit to field length * 2 characters (2 hex chars per byte)
+                const maxChars = field.length * 2;
+                cleaned = cleaned.substring(0, maxChars);
+                
+                // Add spaces every 2 characters (after each byte)
+                let formatted = '';
+                for (let i = 0; i < cleaned.length; i += 2) {
+                    if (i > 0) formatted += ' ';
+                    formatted += cleaned.substring(i, i + 2);
+                }
+                
+                return formatted;
+            };
+            
+            const handleInputChange = (e) => {
+                const input = e.target.value;
+                
+                // For hex mode (byte arrays), auto-format as hex with spaces
+                if (inputMode === 'hex') {
+                    const formatted = formatHexInput(input);
+                    setValue(formatted);
+                } else if (inputMode === 'int') {
+                    // Allow only digits, 'x', and 'X' for hex prefix
+                    if (/^(0x)?[0-9A-Fa-fXx]*$/.test(input)) {
+                        setValue(input);
+                    }
+                } else {
+                    setValue(input);
+                }
+            };
+            
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    handleSave();
+                } else if (e.key === 'Escape') {
+                    onClose();
+                }
+                
+                // For hex input mode, only allow hex characters and control keys
+                if (inputMode === 'hex' && !e.ctrlKey && !e.metaKey) {
+                    const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                    const isHexChar = /^[0-9A-Fa-f]$/.test(e.key);
+                    
+                    if (!isHexChar && !allowedKeys.includes(e.key)) {
+                        e.preventDefault();
+                    }
+                }
+            };
             
             const handleSave = () => {
                 setError('');
@@ -668,57 +745,59 @@ json.dumps(result)
                 try {
                     let newBytes;
                     
-                    // Determine field type and convert value
-                    if (field.length === 1) {
-                        // Single byte (Int8)
-                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                        if (isNaN(val) || val < 0 || val > 255) {
-                            throw new Error('Value must be between 0 and 255');
+                    // Check if we're in hex mode (for byte arrays)
+                    if (inputMode === 'hex') {
+                        // Hex byte array
+                        const hexStr = value.replace(/\s/g, '');
+                        if (hexStr.length % 2 !== 0) {
+                            throw new Error('Hex string must have even number of characters');
                         }
-                        newBytes = new Uint8Array([val]);
-                    } else if (field.length === 2) {
-                        // 2 bytes (Int16)
-                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                        if (isNaN(val) || val < 0 || val > 65535) {
-                            throw new Error('Value must be between 0 and 65535');
+                        if (hexStr.length / 2 > field.length) {
+                            throw new Error(`Too many bytes. Max ${field.length} bytes allowed.`);
                         }
-                        // Little endian
-                        newBytes = new Uint8Array([val & 0xFF, (val >> 8) & 0xFF]);
-                    } else if (field.length === 4) {
-                        // 4 bytes (Int32)
-                        let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                        if (isNaN(val) || val < 0 || val > 4294967295) {
-                            throw new Error('Value must be between 0 and 4294967295');
+                        newBytes = new Uint8Array(field.length);
+                        for (let i = 0; i < hexStr.length / 2; i++) {
+                            const byteVal = parseInt(hexStr.substr(i * 2, 2), 16);
+                            if (isNaN(byteVal)) {
+                                throw new Error('Invalid hex value');
+                            }
+                            newBytes[i] = byteVal;
                         }
-                        // Little endian
-                        newBytes = new Uint8Array([
-                            val & 0xFF,
-                            (val >> 8) & 0xFF,
-                            (val >> 16) & 0xFF,
-                            (val >> 24) & 0xFF
-                        ]);
+                    } else if (inputMode === 'int') {
+                        // Integer field
+                        if (field.length === 1) {
+                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                            if (isNaN(val) || val < 0 || val > 255) {
+                                throw new Error('Value must be between 0 and 255');
+                            }
+                            newBytes = new Uint8Array([val]);
+                        } else if (field.length === 2) {
+                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                            if (isNaN(val) || val < 0 || val > 65535) {
+                                throw new Error('Value must be between 0 and 65535');
+                            }
+                            newBytes = new Uint8Array([val & 0xFF, (val >> 8) & 0xFF]);
+                        } else if (field.length === 4) {
+                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
+                            if (isNaN(val) || val < 0 || val > 4294967295) {
+                                throw new Error('Value must be between 0 and 4294967295');
+                            }
+                            newBytes = new Uint8Array([
+                                val & 0xFF,
+                                (val >> 8) & 0xFF,
+                                (val >> 16) & 0xFF,
+                                (val >> 24) & 0xFF
+                            ]);
+                        }
                     } else {
-                        // Bytes or string
-                        if (value.match(/^[0-9A-Fa-f\s]+$/)) {
-                            // Hex string
-                            const hexStr = value.replace(/\s/g, '');
-                            if (hexStr.length !== field.length * 2) {
-                                throw new Error(`Hex string must be ${field.length * 2} characters (${field.length} bytes)`);
-                            }
-                            newBytes = new Uint8Array(field.length);
-                            for (let i = 0; i < field.length; i++) {
-                                newBytes[i] = parseInt(hexStr.substr(i * 2, 2), 16);
-                            }
-                        } else {
-                            // ASCII string
-                            const encoder = new TextEncoder();
-                            const encoded = encoder.encode(value);
-                            if (encoded.length > field.length) {
-                                throw new Error(`String too long. Max ${field.length} bytes.`);
-                            }
-                            newBytes = new Uint8Array(field.length);
-                            newBytes.set(encoded);
+                        // String mode
+                        const encoder = new TextEncoder();
+                        const encoded = encoder.encode(value);
+                        if (encoded.length > field.length) {
+                            throw new Error(`String too long. Max ${field.length} bytes.`);
                         }
+                        newBytes = new Uint8Array(field.length);
+                        newBytes.set(encoded);
                     }
                     
                     onSave(field.offset, newBytes);
@@ -729,14 +808,46 @@ json.dumps(result)
             };
             
             const getInputHelp = () => {
-                if (field.length === 1) {
-                    return 'Enter decimal (0-255) or hex (0xFF)';
-                } else if (field.length === 2) {
-                    return 'Enter decimal (0-65535) or hex (0xFFFF)';
-                } else if (field.length === 4) {
-                    return 'Enter decimal or hex (0xFFFFFFFF)';
+                if (inputMode === 'hex') {
+                    return `Enter ${field.length} hex bytes (auto-spaced)`;
+                } else if (inputMode === 'int') {
+                    if (field.length === 1) {
+                        return 'Enter decimal (0-255) or hex (0xFF)';
+                    } else if (field.length === 2) {
+                        return 'Enter decimal (0-65535) or hex (0xFFFF)';
+                    } else if (field.length === 4) {
+                        return 'Enter decimal or hex (0xFFFFFFFF)';
+                    }
                 } else {
-                    return 'Enter hex bytes (e.g., "DEADBEEF") or ASCII string';
+                    return 'Enter ASCII string';
+                }
+            };
+            
+            const getPlaceholder = () => {
+                if (inputMode === 'hex') {
+                    // Show hex byte pattern
+                    return Array(Math.min(field.length, 4)).fill('00').join(' ') + 
+                           (field.length > 4 ? ' ...' : '');
+                } else if (inputMode === 'int') {
+                    if (field.length === 1) {
+                        return '0xFF or 255';
+                    } else if (field.length === 2) {
+                        return '0x1234 or 4660';
+                    } else if (field.length === 4) {
+                        return '0xDEADBEEF or 3735928559';
+                    }
+                } else {
+                    return 'Enter text...';
+                }
+            };
+            
+            const toggleInputMode = () => {
+                if (inputMode === 'hex') {
+                    setInputMode('string');
+                    setValue('');
+                } else {
+                    setInputMode('hex');
+                    setValue('');
                 }
             };
             
@@ -751,8 +862,23 @@ json.dumps(result)
                             <div className="text-sm mb-2" style={{ color: '#8b949e' }}>
                                 <div>Offset: 0x{field.offset.toString(16).padStart(4, '0')}</div>
                                 <div>Size: {field.length} bytes</div>
-                                <div className="mt-1" style={{ color: '#6e7681', fontSize: '12px' }}>
-                                    {getInputHelp()}
+                                <div className="mt-1 flex items-center justify-between">
+                                    <span style={{ color: '#6e7681', fontSize: '12px' }}>
+                                        {getInputHelp()}
+                                    </span>
+                                    {inputMode !== 'int' && (
+                                        <button
+                                            onClick={toggleInputMode}
+                                            className="px-2 py-1 text-xs rounded"
+                                            style={{
+                                                background: '#21262d',
+                                                border: '1px solid #30363d',
+                                                color: '#58a6ff'
+                                            }}
+                                        >
+                                            {inputMode === 'hex' ? 'Switch to ASCII' : 'Switch to Hex'}
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                             
@@ -760,14 +886,21 @@ json.dumps(result)
                                 type="text"
                                 className="modal-input"
                                 value={value}
-                                onChange={(e) => setValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleSave();
-                                    if (e.key === 'Escape') onClose();
-                                }}
-                                placeholder="Enter new value"
+                                onChange={handleInputChange}
+                                onKeyDown={handleKeyDown}
+                                placeholder={getPlaceholder()}
                                 autoFocus
+                                style={{
+                                    fontFamily: inputMode === 'hex' ? 'JetBrains Mono, monospace' : 'inherit',
+                                    letterSpacing: inputMode === 'hex' ? '0.05em' : 'normal'
+                                }}
                             />
+                            
+                            {inputMode === 'hex' && (
+                                <div className="mt-2 text-xs" style={{ color: '#6e7681' }}>
+                                    💡 Tip: Just type hex digits, spaces will be added automatically
+                                </div>
+                            )}
                             
                             {error && (
                                 <div className="mt-2 text-sm" style={{ color: '#ff7b72' }}>
