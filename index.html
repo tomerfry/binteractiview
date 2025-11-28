@@ -1469,12 +1469,29 @@ format_struct = Struct(
                 const margin = 20;
                 const headerHeight = 60;
                 
-                // Calculate SVG dimensions
+                // Calculate SVG dimensions - need to count ALL fields including nested ones
                 const numLines = Math.ceil(data.length / bytesPerLine);
                 const hexViewHeight = numLines * lineHeight + headerHeight;
-                const legendHeight = fields.length * 25 + 40;
+                
+                // Flatten fields to count total including nested
+                const flattenAllFields = (flds) => {
+                    let count = 0;
+                    flds.forEach(f => {
+                        count++; // Count this field
+                        if (f.children && f.children.length > 0) {
+                            count += flattenAllFields(f.children); // Count nested fields
+                        }
+                    });
+                    return count;
+                };
+                
+                const totalFieldCount = flattenAllFields(fields);
+                const legendHeight = totalFieldCount * 25 + 40; // 25px per field + header
                 const totalHeight = hexViewHeight + legendHeight + margin * 3;
                 const totalWidth = offsetWidth + hexWidth + margin * 4;
+                
+                console.log(`SVG Export: ${totalFieldCount} fields (including nested), height=${totalHeight}px`);
+                console.log(`  Hex view: ${hexViewHeight}px, Legend: ${legendHeight}px, Margins: ${margin * 3}px`);
                 
                 // Color palette
                 const colors = [
@@ -1483,7 +1500,7 @@ format_struct = Struct(
                 ];
                 
                 let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${totalWidth}" height="${totalHeight}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${totalWidth}" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
       text { font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px; }
@@ -1556,6 +1573,7 @@ format_struct = Struct(
     <text x="0" y="0" class="title" font-size="14">Parsed Fields</text>
 `;
                 
+                // Flatten fields with depth for proper display
                 const flatFields = [];
                 const flatten = (flds, depth = 0) => {
                     flds.forEach((f, idx) => {
@@ -1574,7 +1592,8 @@ format_struct = Struct(
                     svg += `    <text x="${indent + 18}" y="${y}" class="field-name">${field.name}</text>\n`;
                     svg += `    <text x="${indent + 200}" y="${y}" class="field-value">@0x${field.offset.toString(16).padStart(4, '0')} (${field.length} bytes)</text>\n`;
                     if (field.value) {
-                        svg += `    <text x="${indent + 350}" y="${y}" class="field-value">${field.value.length > 40 ? field.value.substring(0, 40) + '...' : field.value}</text>\n`;
+                        const displayValue = field.value.length > 40 ? field.value.substring(0, 40) + '...' : field.value;
+                        svg += `    <text x="${indent + 350}" y="${y}" class="field-value">${displayValue}</text>\n`;
                     }
                 });
                 
