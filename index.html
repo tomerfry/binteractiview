@@ -1291,6 +1291,13 @@ format_struct = Struct(
             const [error, setError] = useState(null);
             const [parseStatus, setParseStatus] = useState('');
             const [editingField, setEditingField] = useState(null);
+            
+            // PCAP-specific state
+            const [isPcapFile, setIsPcapFile] = useState(false);
+            const [pcapPackets, setPcapPackets] = useState([]);
+            const [currentPacketIndex, setCurrentPacketIndex] = useState(0);
+            const [originalPcapData, setOriginalPcapData] = useState(null);
+            
             const fileInputRef = useRef(null);
             const parseTimeoutRef = useRef(null);
 
@@ -1344,13 +1351,210 @@ format_struct = Struct(
                 reader.onload = (e) => {
                     const arrayBuffer = e.target.result;
                     const uint8Array = new Uint8Array(arrayBuffer);
-                    setFileData(uint8Array);
-                    setOriginalFileData(new Uint8Array(uint8Array));
-                    setHasUnsavedChanges(false);
-                    setParseStatus(`>>> File loaded: ${uint8Array.length} bytes`);
+                    
+                    // Check if it's a PCAP file by magic number (more reliable than extension)
+                    let isPcap = false;
+                    if (uint8Array.length >= 4) {
+                        const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
+                        const magic = view.getUint32(0, true);  // Try little-endian
+                        const magicBE = view.getUint32(0, false); // Try big-endian
+                        
+                        // PCAP: 0xa1b2c3d4 (LE) or 0xd4c3b2a1 (BE)
+                        // PCAPNG: 0x0A0D0D0A
+                        isPcap = (magic === 0xa1b2c3d4 || magicBE === 0xd4c3b2a1 || magic === 0x0A0D0D0A);
+                        
+                        if (!isPcap) {
+                            // Also check file extension as fallback
+                            const fileName = file.name.toLowerCase();
+                            isPcap = fileName.endsWith('.pcap') || fileName.endsWith('.pcapng');
+                        }
+                    }
+                    
+                    if (isPcap) {
+                        try {
+                            const packets = parsePcap(uint8Array);
+                            setIsPcapFile(true);
+                            setPcapPackets(packets);
+                            setOriginalPcapData(uint8Array);
+                            setCurrentPacketIndex(0);
+                            
+                            // Load first packet
+                            if (packets.length > 0) {
+                                setFileData(packets[0].data);
+                                setOriginalFileData(new Uint8Array(packets[0].data));
+                                setParseStatus(`>>> PCAP loaded: ${packets.length} packets, showing packet 0 (${packets[0].data.length} bytes)`);
+                            } else {
+                                setParseStatus(`>>> PCAP loaded but contains no packets`);
+                            }
+                        } catch (err) {
+                            console.error('PCAP parsing error:', err);
+                            setParseStatus(`>>> PCAP parse error: ${err.message}`);
+                            // Fall back to loading as regular binary
+                            setIsPcapFile(false);
+                            setFileData(uint8Array);
+                            setOriginalFileData(new Uint8Array(uint8Array));
+                        }
+                    } else {
+                        // Regular binary file
+                        setIsPcapFile(false);
+                        setPcapPackets([]);
+                        setFileData(uint8Array);
+                        setOriginalFileData(new Uint8Array(uint8Array));
+                        setHasUnsavedChanges(false);
+                        setParseStatus(`>>> File loaded: ${uint8Array.length} bytes`);
+                    }
                 };
                 
                 reader.readAsArrayBuffer(file);
+            };
+            
+            // PCAP parsing function (supports both PCAP and PCAPNG)
+            const parsePcap = (data) => {
+                const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+                const packets = [];
+                
+                // Check magic number to determine format
+                const magic = view.getUint32(0, true);
+                const magicBE = view.getUint32(0, false);
+                
+                // PCAPNG format: 0x0A0D0D0A (Section Header Block)
+                if (magic === 0x0A0D0D0A) {
+                    console.log('PCAPNG format detected');
+                    return parsePcapNG(data, view);
+                }
+                
+                // PCAP format: 0xa1b2c3d4 (LE) or 0xd4c3b2a1 (BE)
+                const isLittleEndian = magic === 0xa1b2c3d4;
+                const isBigEndian = magicBE === 0xd4c3b2a1;
+                
+                if (!isLittleEndian && !isBigEndian) {
+                    throw new Error('Not a valid PCAP/PCAPNG file (invalid magic number)');
+                }
+                
+                console.log(`PCAP file detected, endianness: ${isLittleEndian ? 'little' : 'big'}`);
+                
+                // PCAP Global Header is 24 bytes
+                let offset = 24;
+                let packetNum = 0;
+                
+                while (offset + 16 <= data.length) {
+                    // Packet Header (16 bytes):
+                    const ts_sec = view.getUint32(offset, isLittleEndian);
+                    const ts_usec = view.getUint32(offset + 4, isLittleEndian);
+                    const incl_len = view.getUint32(offset + 8, isLittleEndian);
+                    const orig_len = view.getUint32(offset + 12, isLittleEndian);
+                    
+                    offset += 16;
+                    
+                    if (offset + incl_len > data.length) {
+                        console.warn(`Packet ${packetNum} truncated`);
+                        break;
+                    }
+                    
+                    const packetData = new Uint8Array(data.buffer, data.byteOffset + offset, incl_len);
+                    
+                    packets.push({
+                        index: packetNum,
+                        timestamp: ts_sec + ts_usec / 1000000,
+                        capturedLength: incl_len,
+                        originalLength: orig_len,
+                        data: packetData,
+                        offset: offset
+                    });
+                    
+                    offset += incl_len;
+                    packetNum++;
+                }
+                
+                console.log(`Parsed ${packets.length} packets from PCAP`);
+                return packets;
+            };
+            
+            // PCAPNG parsing function (simplified - only extracts Enhanced Packet Blocks)
+            const parsePcapNG = (data, view) => {
+                const packets = [];
+                let offset = 0;
+                let packetNum = 0;
+                
+                while (offset + 12 <= data.length) {
+                    // Block type (4 bytes) + Block total length (4 bytes)
+                    const blockType = view.getUint32(offset, true);
+                    const blockLen = view.getUint32(offset + 4, true);
+                    
+                    if (blockLen < 12 || offset + blockLen > data.length) {
+                        console.warn(`Invalid block at offset ${offset}`);
+                        break;
+                    }
+                    
+                    // Enhanced Packet Block (type 0x00000006) or Simple Packet Block (type 0x00000003)
+                    if (blockType === 0x00000006) {
+                        // Enhanced Packet Block
+                        // Skip: interface ID (4), timestamp high (4), timestamp low (4)
+                        const capturedLen = view.getUint32(offset + 20, true);
+                        const originalLen = view.getUint32(offset + 24, true);
+                        
+                        const dataOffset = offset + 28; // After EPB header
+                        
+                        if (dataOffset + capturedLen <= offset + blockLen) {
+                            const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
+                            
+                            const tsHigh = view.getUint32(offset + 12, true);
+                            const tsLow = view.getUint32(offset + 16, true);
+                            const timestamp = (tsHigh * 0x100000000 + tsLow) / 1000000; // Microseconds to seconds
+                            
+                            packets.push({
+                                index: packetNum,
+                                timestamp: timestamp,
+                                capturedLength: capturedLen,
+                                originalLength: originalLen,
+                                data: packetData,
+                                offset: dataOffset
+                            });
+                            
+                            packetNum++;
+                        }
+                    } else if (blockType === 0x00000003) {
+                        // Simple Packet Block (older format)
+                        const originalLen = view.getUint32(offset + 8, true);
+                        const capturedLen = Math.min(originalLen, blockLen - 16);
+                        
+                        const dataOffset = offset + 12;
+                        
+                        if (dataOffset + capturedLen <= offset + blockLen) {
+                            const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
+                            
+                            packets.push({
+                                index: packetNum,
+                                timestamp: 0,
+                                capturedLength: capturedLen,
+                                originalLength: originalLen,
+                                data: packetData,
+                                offset: dataOffset
+                            });
+                            
+                            packetNum++;
+                        }
+                    }
+                    
+                    offset += blockLen;
+                }
+                
+                console.log(`Parsed ${packets.length} packets from PCAPNG`);
+                return packets;
+            };
+            
+            const handlePacketChange = (newIndex) => {
+                if (!isPcapFile || newIndex < 0 || newIndex >= pcapPackets.length) return;
+                
+                const packet = pcapPackets[newIndex];
+                setCurrentPacketIndex(newIndex);
+                setFileData(packet.data);
+                setOriginalFileData(new Uint8Array(packet.data));
+                setHasUnsavedChanges(false);
+                setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
+                
+                // Auto-reparse with new packet data
+                setTimeout(() => handleParse(), 100);
             };
 
             const flattenFields = (fields, list = []) => {
@@ -1682,7 +1886,7 @@ format_struct = Struct(
                                     type="file"
                                     ref={fileInputRef}
                                     onChange={handleFileUpload}
-                                    accept="*"
+                                    accept="*,.pcap,.pcapng"
                                 />
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
@@ -1702,12 +1906,7 @@ format_struct = Struct(
                                         </button>
                                         <button
                                             onClick={handleSaveFile}
-                                            className="px-4 py-2 rounded"
-                                            style={{
-                                                background: '#238636',
-                                                border: '1px solid #2ea043',
-                                                color: '#fff'
-                                            }}
+                                            className="px-4 py-2 btn-terminal rounded"
                                             title="Save modified file"
                                         >
                                             Save File
@@ -1716,13 +1915,75 @@ format_struct = Struct(
                                 )}
                                 <button
                                     onClick={handleExportSVG}
-                                    disabled={!fileData || isLoading || parsedFields.length === 0}
+                                    disabled={!fileData || parsedFields.length === 0 || isLoading}
                                     className="px-4 py-2 btn-terminal rounded"
                                 >
                                     Export SVG
                                 </button>
                             </div>
                         </div>
+                        
+                        {/* PCAP Packet Navigation Bar */}
+                        {isPcapFile && pcapPackets.length > 0 && (
+                            <div className="mb-4 p-3 rounded" style={{ background: '#161b22', border: '1px solid #30363d' }}>
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold" style={{ color: '#58a6ff' }}>📦 PCAP Mode</span>
+                                        <span className="text-xs opacity-70">{pcapPackets.length} packets total</span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            className="px-2 py-1 text-xs rounded btn-terminal"
+                                            onClick={() => handlePacketChange(0)}
+                                            disabled={currentPacketIndex === 0}
+                                        >
+                                            ⏮ First
+                                        </button>
+                                        <button
+                                            className="px-2 py-1 text-xs rounded btn-terminal"
+                                            onClick={() => handlePacketChange(currentPacketIndex - 1)}
+                                            disabled={currentPacketIndex === 0}
+                                        >
+                                            ◀ Prev
+                                        </button>
+                                        <span className="text-sm font-mono px-3" style={{ color: '#58a6ff' }}>
+                                            Packet {currentPacketIndex} / {pcapPackets.length - 1}
+                                        </span>
+                                        <button
+                                            className="px-2 py-1 text-xs rounded btn-terminal"
+                                            onClick={() => handlePacketChange(currentPacketIndex + 1)}
+                                            disabled={currentPacketIndex >= pcapPackets.length - 1}
+                                        >
+                                            Next ▶
+                                        </button>
+                                        <button
+                                            className="px-2 py-1 text-xs rounded btn-terminal"
+                                            onClick={() => handlePacketChange(pcapPackets.length - 1)}
+                                            disabled={currentPacketIndex >= pcapPackets.length - 1}
+                                        >
+                                            Last ⏭
+                                        </button>
+                                        <span className="text-xs opacity-50 px-2">|</span>
+                                        <span className="text-xs opacity-70">Go to:</span>
+                                        <input
+                                            type="number"
+                                            className="w-20 px-2 py-1 text-xs rounded"
+                                            style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }}
+                                            min="0"
+                                            max={pcapPackets.length - 1}
+                                            value={currentPacketIndex}
+                                            onChange={(e) => handlePacketChange(parseInt(e.target.value) || 0)}
+                                        />
+                                    </div>
+                                    <div className="text-xs opacity-70">
+                                        Captured: {pcapPackets[currentPacketIndex].capturedLength}B • 
+                                        Original: {pcapPackets[currentPacketIndex].originalLength}B
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         
                         <div className="mt-2 text-sm flex items-center justify-between">
                             <div>
