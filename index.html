@@ -385,6 +385,34 @@ ${structCode}
 # Get new names added by user code
 _user_constructs = set(dir()) - _builtin_constructs
 
+# Helper function to wrap all fields in RawCopy
+def wrap_with_rawcopy(construct_obj):
+    """Recursively wrap all fields with RawCopy to capture offset information."""
+    if isinstance(construct_obj, Struct):
+        new_subcons = {}
+        for subcon in construct_obj.subcons:
+            # Each subcon has a 'name' attribute
+            field_name = subcon.name
+            # Wrap each field with RawCopy
+            if isinstance(subcon.subcon, (Struct, Array)):
+                # Recursively wrap nested structures
+                wrapped = RawCopy(wrap_with_rawcopy(subcon.subcon))
+            else:
+                wrapped = RawCopy(subcon.subcon)
+            # Store with the original name
+            new_subcons[field_name] = wrapped
+        # Return new Struct with wrapped fields
+        return Struct(**new_subcons)
+    elif isinstance(construct_obj, Array):
+        # Wrap the subcon of the array
+        if isinstance(construct_obj.subcon, Struct):
+            wrapped_subcon = wrap_with_rawcopy(construct_obj.subcon)
+        else:
+            wrapped_subcon = RawCopy(construct_obj.subcon)
+        return Array(construct_obj.count, wrapped_subcon)
+    else:
+        return RawCopy(construct_obj)
+
 # Parse the data
 def parse_structure(data_list):
     try:
@@ -414,87 +442,159 @@ def parse_structure(data_list):
         if struct_obj is None:
             return {"error": "No Construct structure found. Define a structure (e.g., format_struct = Struct(...))"}
         
-        # Parse the data
-        print("Parsing data...")
-        parsed = struct_obj.parse(data_bytes)
-        print(f"Parse complete, result type: {type(parsed)}")
-        print(f"Parsed container: {parsed}")
+        # Wrap the structure with RawCopy for offset tracking
+        wrapped_struct = wrap_with_rawcopy(struct_obj)
         
-        # Convert to JSON-serializable format
-        def to_dict(obj, offset=0):
+        # Parse the data
+        print("Parsing data with RawCopy wrapper...")
+        parsed = wrapped_struct.parse(data_bytes)
+        print(f"Parse complete, result type: {type(parsed)}")
+        print(f"Parsed container keys: {list(parsed.keys()) if hasattr(parsed, 'keys') else 'N/A'}")
+        print(f"Parsed container items: {[(k, type(v)) for k, v in parsed.items()] if hasattr(parsed, 'items') else 'N/A'}")
+        
+        # Convert to JSON-serializable format using RawCopy offset information
+        def to_dict(obj, parent_name="", depth=0):
+            result = []
+            
             if isinstance(obj, Container):
-                result = []
-                current_offset = offset
-                
                 for key, value in obj.items():
                     if key.startswith('_'):
                         continue
                     
-                    print(f"Processing field: {key} = {repr(value)[:100]}")
+                    print(f"{'  ' * depth}Processing field: {key} = {type(value)}")
                     
-                    # Try to get the size
-                    size = 0
-                    if isinstance(value, (bytes, bytearray)):
-                        size = len(value)
-                    elif isinstance(value, int):
-                        # Guess size based on value
-                        if value < 256:
-                            size = 1
-                        elif value < 65536:
-                            size = 2
-                        elif value < 4294967296:
-                            size = 4
+                    # Check if this is a RawCopy result (has 'data', 'value', 'offset1', 'offset2')
+                    if isinstance(value, Container) and hasattr(value, 'offset1') and hasattr(value, 'offset2'):
+                        offset = value.offset1
+                        length = value.offset2 - value.offset1
+                        actual_value = value.value
+                        
+                        print(f"{'  ' * depth}  RawCopy field: offset={offset}, length={length}, value_type={type(actual_value)}")
+                        
+                        # Handle different value types
+                        if isinstance(actual_value, ListContainer):
+                            # Array of items
+                            children = []
+                            for idx, item in enumerate(actual_value):
+                                # Check if item is a Container with nested RawCopy fields
+                                if isinstance(item, Container):
+                                    # This is a Struct in the array - need to process its fields
+                                    nested_fields = to_dict(item, f"[{idx}]", depth + 2)
+                                    
+                                    if nested_fields:
+                                        # Calculate total size from nested fields
+                                        if len(nested_fields) > 0:
+                                            first_offset = nested_fields[0]['offset']
+                                            last_field = nested_fields[-1]
+                                            last_offset = last_field['offset'] + last_field['length']
+                                            item_size = last_offset - first_offset
+                                            
+                                            children.append({
+                                                'name': f'[{idx}]',
+                                                'value': None,
+                                                'offset': first_offset,
+                                                'length': item_size,
+                                                'children': nested_fields
+                                            })
+                                    else:
+                                        print(f"{'  ' * depth}    WARNING: Array item [{idx}] produced no nested fields")
+                                elif hasattr(item, 'offset1') and hasattr(item, 'offset2'):
+                                    # Direct RawCopy wrapped value (shouldn't happen for Struct in Array)
+                                    child_offset = item.offset1
+                                    child_length = item.offset2 - item.offset1
+                                    child_value = item.value
+                                    
+                                    display_value = format_value(child_value, child_length)
+                                    children.append({
+                                        'name': f'[{idx}]',
+                                        'value': display_value,
+                                        'offset': child_offset,
+                                        'length': child_length,
+                                        'rawValue': child_value if isinstance(child_value, (int, str, bool, type(None))) else None
+                                    })
+                                else:
+                                    # Fallback - shouldn't reach here
+                                    print(f"{'  ' * depth}    WARNING: Array item [{idx}] is not properly wrapped: {type(item)}")
+                                    children.append({
+                                        'name': f'[{idx}]',
+                                        'value': str(item),
+                                        'offset': offset + idx,
+                                        'length': 1,
+                                        'rawValue': None
+                                    })
+                            
+                            result.append({
+                                'name': key,
+                                'value': f'Array[{len(actual_value)}]',
+                                'offset': offset,
+                                'length': length,
+                                'children': children
+                            })
+                        elif isinstance(actual_value, Container):
+                            # Nested structure
+                            nested_children = to_dict(actual_value, key, depth + 1)
+                            result.append({
+                                'name': key,
+                                'value': None,
+                                'offset': offset,
+                                'length': length,
+                                'children': nested_children
+                            })
                         else:
-                            size = 8
-                    elif isinstance(value, str):
-                        size = len(value.encode())
-                    elif isinstance(value, Container):
-                        # Recursive structure
-                        child_result = to_dict(value, current_offset)
-                        total_size = sum(c.get('length', 0) for c in child_result)
-                        result.append({
-                            'name': key,
-                            'value': None,
-                            'offset': current_offset,
-                            'length': total_size,
-                            'children': child_result
-                        })
-                        current_offset += total_size
-                        continue
-                    
-                    # Format value for display
-                    if isinstance(value, bytes):
-                        display_value = value.hex().upper() if len(value) <= 16 else f"{value[:8].hex().upper()}... ({len(value)} bytes)"
-                    elif isinstance(value, int):
-                        if size == 1:
-                            display_value = f"0x{value:02X} ({value})"
-                        elif size == 2:
-                            display_value = f"0x{value:04X} ({value})"
-                        elif size == 4:
-                            display_value = f"0x{value:08X} ({value})"
-                        else:
-                            display_value = f"0x{value:X} ({value})"
-                    elif isinstance(value, str):
-                        display_value = f'"{value}"'
+                            # Simple field
+                            display_value = format_value(actual_value, length)
+                            result.append({
+                                'name': key,
+                                'value': display_value,
+                                'offset': offset,
+                                'length': length,
+                                'rawValue': actual_value if isinstance(actual_value, (int, str, bool, type(None))) else None
+                            })
                     else:
-                        display_value = str(value)
-                    
-                    result.append({
-                        'name': key,
-                        'value': display_value,
-                        'offset': current_offset,
-                        'length': size,
-                        'rawValue': value if isinstance(value, (int, str, bool, type(None))) else None
-                    })
-                    current_offset += size
-                
-                print(f"Converted {len(result)} fields")
-                return result
-            else:
-                print(f"WARNING: Parsed result is not a Container, it's {type(obj)}")
-                return []
+                        # Not a RawCopy result - this shouldn't happen with our wrapper
+                        print(f"{'  ' * depth}  WARNING: Field {key} is not RawCopy wrapped")
+                        if isinstance(value, Container):
+                            nested = to_dict(value, key, depth + 1)
+                            if nested:
+                                result.append({
+                                    'name': key,
+                                    'value': None,
+                                    'offset': 0,
+                                    'length': 0,
+                                    'children': nested
+                                })
+                        else:
+                            result.append({
+                                'name': key,
+                                'value': str(value),
+                                'offset': 0,
+                                'length': 0,
+                                'rawValue': value if isinstance(value, (int, str, bool, type(None))) else None
+                            })
+            
+            print(f"{'  ' * depth}Returning {len(result)} fields")
+            return result
         
-        result = to_dict(parsed, 0)
+        def format_value(value, length):
+            """Format a value for display."""
+            if isinstance(value, bytes):
+                return value.hex().upper() if len(value) <= 16 else f"{value[:8].hex().upper()}... ({len(value)} bytes)"
+            elif isinstance(value, int):
+                if length == 1:
+                    return f"0x{value:02X} ({value})"
+                elif length == 2:
+                    return f"0x{value:04X} ({value})"
+                elif length == 4:
+                    return f"0x{value:08X} ({value})"
+                else:
+                    return f"0x{value:X} ({value})"
+            elif isinstance(value, str):
+                return f'"{value}"'
+            else:
+                return str(value)
+        
+        result = to_dict(parsed)
+        print(f"Final result: {len(result)} top-level fields")
         return {"fields": result}
         
     except Exception as e:
@@ -1075,6 +1175,9 @@ json.dumps(result)
             const isSelected = JSON.stringify(currentPath) === JSON.stringify(selectedPath);
             const canEdit = !hasChildren && node.length > 0;
             
+            // Format the size display
+            const sizeDisplay = node.length === 1 ? '1 byte' : `${node.length} bytes`;
+            
             return (
                 <div>
                     <div
@@ -1093,7 +1196,7 @@ json.dumps(result)
                             <div className="flex items-center justify-between">
                                 <span className="font-semibold text-blue-400">{node.name}</span>
                                 <span className="text-xs text-gray-500">
-                                    @0x{node.offset.toString(16).padStart(4, '0')} ({node.length} bytes)
+                                    @0x{node.offset.toString(16).padStart(4, '0')} ({sizeDisplay})
                                 </span>
                             </div>
                             {node.value !== null && node.value !== undefined && (
