@@ -752,11 +752,17 @@ json.dumps(result)
                         if (hexStr.length % 2 !== 0) {
                             throw new Error('Hex string must have even number of characters');
                         }
-                        if (hexStr.length / 2 > field.length) {
+                        const numBytes = hexStr.length / 2;
+                        if (numBytes > field.length) {
                             throw new Error(`Too many bytes. Max ${field.length} bytes allowed.`);
                         }
+                        // IMPORTANT: Only create array for the exact number of bytes entered
+                        // Don't pad with zeros - this ensures we only update what user entered
+                        if (numBytes !== field.length) {
+                            throw new Error(`Must enter exactly ${field.length} bytes (${field.length * 2} hex characters)`);
+                        }
                         newBytes = new Uint8Array(field.length);
-                        for (let i = 0; i < hexStr.length / 2; i++) {
+                        for (let i = 0; i < numBytes; i++) {
                             const byteVal = parseInt(hexStr.substr(i * 2, 2), 16);
                             if (isNaN(byteVal)) {
                                 throw new Error('Invalid hex value');
@@ -796,8 +802,10 @@ json.dumps(result)
                         if (encoded.length > field.length) {
                             throw new Error(`String too long. Max ${field.length} bytes.`);
                         }
-                        newBytes = new Uint8Array(field.length);
-                        newBytes.set(encoded);
+                        if (encoded.length !== field.length) {
+                            throw new Error(`String must be exactly ${field.length} bytes. Current: ${encoded.length} bytes.`);
+                        }
+                        newBytes = new Uint8Array(encoded);
                     }
                     
                     onSave(field.offset, newBytes);
