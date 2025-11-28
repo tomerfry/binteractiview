@@ -686,31 +686,41 @@ json.dumps(result)
                 }
             }, [field]);
             
-            const formatHexInput = (input) => {
-                // Remove all non-hex characters
-                let cleaned = input.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
-                
-                // Limit to field length * 2 characters (2 hex chars per byte)
-                const maxChars = field.length * 2;
-                cleaned = cleaned.substring(0, maxChars);
-                
+            const inputRef = useRef(null);
+            
+            const formatHexWithSpaces = (hexStr) => {
                 // Add spaces every 2 characters (after each byte)
                 let formatted = '';
-                for (let i = 0; i < cleaned.length; i += 2) {
+                for (let i = 0; i < hexStr.length; i += 2) {
                     if (i > 0) formatted += ' ';
-                    formatted += cleaned.substring(i, i + 2);
+                    formatted += hexStr.substring(i, i + 2);
                 }
-                
                 return formatted;
             };
             
             const handleInputChange = (e) => {
                 const input = e.target.value;
                 
-                // For hex mode (byte arrays), auto-format as hex with spaces
+                // For hex mode (byte arrays), handle in-place nibble editing
                 if (inputMode === 'hex') {
-                    const formatted = formatHexInput(input);
-                    setValue(formatted);
+                    // Remove spaces to get raw hex
+                    const newHex = input.replace(/\s/g, '').toUpperCase();
+                    const oldHex = value.replace(/\s/g, '');
+                    
+                    // Ensure we don't exceed field length
+                    const maxChars = field.length * 2;
+                    if (newHex.length > maxChars) {
+                        return; // Don't allow more than field size
+                    }
+                    
+                    // Pad with original bytes if user deleted some
+                    let finalHex = newHex;
+                    if (finalHex.length < maxChars) {
+                        // Pad with zeros to maintain field length
+                        finalHex = finalHex.padEnd(maxChars, '0');
+                    }
+                    
+                    setValue(formatHexWithSpaces(finalHex));
                 } else if (inputMode === 'int') {
                     // Allow only digits, 'x', and 'X' for hex prefix
                     if (/^(0x)?[0-9A-Fa-fXx]*$/.test(input)) {
@@ -724,16 +734,136 @@ json.dumps(result)
             const handleKeyDown = (e) => {
                 if (e.key === 'Enter') {
                     handleSave();
+                    return;
                 } else if (e.key === 'Escape') {
                     onClose();
+                    return;
                 }
                 
-                // For hex input mode, only allow hex characters and control keys
+                // For hex input mode, handle nibble-by-nibble editing
                 if (inputMode === 'hex' && !e.ctrlKey && !e.metaKey) {
-                    const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                    const input = e.target;
+                    const cursorPos = input.selectionStart;
+                    const currentValue = value.replace(/\s/g, ''); // Remove spaces
+                    
+                    // Check if it's a hex character
                     const isHexChar = /^[0-9A-Fa-f]$/.test(e.key);
                     
-                    if (!isHexChar && !allowedKeys.includes(e.key)) {
+                    if (isHexChar) {
+                        e.preventDefault();
+                        
+                        // Calculate position in hex string (without spaces)
+                        let hexPos = 0;
+                        let visualPos = 0;
+                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
+                            if (value[i] !== ' ') {
+                                hexPos++;
+                            }
+                            visualPos++;
+                        }
+                        
+                        // Replace character at cursor position (overwrite mode)
+                        const newHex = currentValue.substring(0, hexPos) + 
+                                      e.key.toUpperCase() + 
+                                      currentValue.substring(hexPos + 1);
+                        
+                        const formatted = formatHexWithSpaces(newHex);
+                        setValue(formatted);
+                        
+                        // Move cursor forward
+                        setTimeout(() => {
+                            // Calculate new cursor position (accounting for spaces)
+                            let newVisualPos = 0;
+                            let hexCount = 0;
+                            for (let i = 0; i < formatted.length; i++) {
+                                if (formatted[i] !== ' ') {
+                                    hexCount++;
+                                }
+                                newVisualPos = i + 1;
+                                if (hexCount > hexPos) {
+                                    break;
+                                }
+                            }
+                            input.setSelectionRange(newVisualPos, newVisualPos);
+                        }, 0);
+                        
+                        return;
+                    }
+                    
+                    // Handle backspace
+                    if (e.key === 'Backspace') {
+                        e.preventDefault();
+                        
+                        if (cursorPos === 0) return;
+                        
+                        // Calculate position in hex string
+                        let hexPos = 0;
+                        let visualPos = 0;
+                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
+                            if (value[i] !== ' ') {
+                                hexPos++;
+                            }
+                            visualPos++;
+                        }
+                        
+                        if (hexPos > 0) {
+                            // Replace with 0 instead of deleting
+                            const newHex = currentValue.substring(0, hexPos - 1) + 
+                                          '0' + 
+                                          currentValue.substring(hexPos);
+                            
+                            const formatted = formatHexWithSpaces(newHex);
+                            setValue(formatted);
+                            
+                            // Move cursor back
+                            setTimeout(() => {
+                                let newVisualPos = 0;
+                                let hexCount = 0;
+                                for (let i = 0; i < formatted.length; i++) {
+                                    if (formatted[i] !== ' ') {
+                                        hexCount++;
+                                    }
+                                    if (hexCount >= hexPos - 1) {
+                                        newVisualPos = i;
+                                        break;
+                                    }
+                                }
+                                input.setSelectionRange(newVisualPos, newVisualPos);
+                            }, 0);
+                        }
+                        
+                        return;
+                    }
+                    
+                    // Handle delete
+                    if (e.key === 'Delete') {
+                        e.preventDefault();
+                        
+                        // Calculate position in hex string
+                        let hexPos = 0;
+                        let visualPos = 0;
+                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
+                            if (value[i] !== ' ') {
+                                hexPos++;
+                            }
+                            visualPos++;
+                        }
+                        
+                        if (hexPos < currentValue.length) {
+                            // Replace with 0 instead of deleting
+                            const newHex = currentValue.substring(0, hexPos) + 
+                                          '0' + 
+                                          currentValue.substring(hexPos + 1);
+                            
+                            setValue(formatHexWithSpaces(newHex));
+                        }
+                        
+                        return;
+                    }
+                    
+                    // Allow navigation keys
+                    const allowedKeys = ['ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
+                    if (!allowedKeys.includes(e.key)) {
                         e.preventDefault();
                     }
                 }
@@ -756,11 +886,7 @@ json.dumps(result)
                         if (numBytes > field.length) {
                             throw new Error(`Too many bytes. Max ${field.length} bytes allowed.`);
                         }
-                        // IMPORTANT: Only create array for the exact number of bytes entered
-                        // Don't pad with zeros - this ensures we only update what user entered
-                        if (numBytes !== field.length) {
-                            throw new Error(`Must enter exactly ${field.length} bytes (${field.length * 2} hex characters)`);
-                        }
+                        // Create array with exact bytes needed
                         newBytes = new Uint8Array(field.length);
                         for (let i = 0; i < numBytes; i++) {
                             const byteVal = parseInt(hexStr.substr(i * 2, 2), 16);
@@ -769,6 +895,7 @@ json.dumps(result)
                             }
                             newBytes[i] = byteVal;
                         }
+                        // Note: Remaining bytes stay as 0 if not specified
                     } else if (inputMode === 'int') {
                         // Integer field
                         if (field.length === 1) {
@@ -802,10 +929,9 @@ json.dumps(result)
                         if (encoded.length > field.length) {
                             throw new Error(`String too long. Max ${field.length} bytes.`);
                         }
-                        if (encoded.length !== field.length) {
-                            throw new Error(`String must be exactly ${field.length} bytes. Current: ${encoded.length} bytes.`);
-                        }
-                        newBytes = new Uint8Array(encoded);
+                        // Pad with zeros if string is shorter
+                        newBytes = new Uint8Array(field.length);
+                        newBytes.set(encoded);
                     }
                     
                     onSave(field.offset, newBytes);
@@ -891,6 +1017,7 @@ json.dumps(result)
                             </div>
                             
                             <input
+                                ref={inputRef}
                                 type="text"
                                 className="modal-input"
                                 value={value}
@@ -906,7 +1033,7 @@ json.dumps(result)
                             
                             {inputMode === 'hex' && (
                                 <div className="mt-2 text-xs" style={{ color: '#6e7681' }}>
-                                    💡 Tip: Just type hex digits, spaces will be added automatically
+                                    💡 Tip: Type hex digits to overwrite nibbles in-place. Use arrow keys to navigate.
                                 </div>
                             )}
                             
