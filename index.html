@@ -1221,7 +1221,8 @@ json.dumps(result)
                 for (let i = 0; i < highlightRanges.length; i++) {
                     const range = highlightRanges[i];
                     if (byteIndex >= range.offset && byteIndex < range.offset + range.length) {
-                        const baseClass = `field-highlight-${i % 8}`;
+                        // Use topLevelIndex for color instead of range index
+                        const baseClass = `field-highlight-${range.topLevelIndex % 8}`;
                         return isHovered ? `${baseClass} hovered` : baseClass;
                     }
                 }
@@ -2191,16 +2192,36 @@ format_struct = Struct(
             };
 
             const flattenFields = (fields, list = []) => {
-                fields.forEach(field => {
+                fields.forEach((field, topLevelIndex) => {
+                    // For top-level fields, add them with their index
                     list.push({
                         offset: field.offset,
-                        length: field.length
+                        length: field.length,
+                        topLevelIndex: topLevelIndex,  // Track which top-level struct this belongs to
+                        name: field.name,
+                        value: field.value
                     });
+                    // For nested children, inherit the parent's top-level index
                     if (field.children) {
-                        flattenFields(field.children, list);
+                        flattenFieldsNested(field.children, list, topLevelIndex, field.name);
                     }
                 });
                 return list;
+            };
+            
+            const flattenFieldsNested = (fields, list, topLevelIndex, parentName) => {
+                fields.forEach(field => {
+                    list.push({
+                        offset: field.offset,
+                        length: field.length,
+                        topLevelIndex: topLevelIndex,  // Inherit parent's top-level index
+                        name: parentName + '.' + field.name,
+                        value: field.value
+                    });
+                    if (field.children) {
+                        flattenFieldsNested(field.children, list, topLevelIndex, parentName + '.' + field.name);
+                    }
+                });
             };
 
             const handleParse = async () => {
@@ -2371,35 +2392,38 @@ format_struct = Struct(
                 const margin = 20;
                 const headerHeight = 60;
                 
-                // Calculate SVG dimensions - need to count ALL fields including nested ones
-                const numLines = Math.ceil(data.length / bytesPerLine);
-                const hexViewHeight = numLines * lineHeight + headerHeight;
-                
-                // Flatten fields to count total including nested
-                const flattenAllFields = (flds) => {
-                    let count = 0;
-                    flds.forEach(f => {
-                        count++; // Count this field
-                        if (f.children && f.children.length > 0) {
-                            count += flattenAllFields(f.children); // Count nested fields
-                        }
-                    });
-                    return count;
-                };
-                
-                const totalFieldCount = flattenAllFields(fields);
-                const legendHeight = totalFieldCount * 25 + 40; // 25px per field + header
-                const totalHeight = hexViewHeight + legendHeight + margin * 3;
-                const totalWidth = offsetWidth + hexWidth + margin * 4;
-                
-                console.log(`SVG Export: ${totalFieldCount} fields (including nested), height=${totalHeight}px`);
-                console.log(`  Hex view: ${hexViewHeight}px, Legend: ${legendHeight}px, Margins: ${margin * 3}px`);
-                
-                // Color palette
+                // Color palette (matches CSS)
                 const colors = [
                     '#f85149', '#f6ad55', '#57ab5a', '#58a6ff',
                     '#bc80f0', '#ff79c6', '#79c0ff', '#ff9e64'
                 ];
+                
+                // Build the flattened list with top-level tracking
+                const flattenedRanges = flattenFields(fields);
+                
+                // Group ranges by top-level index for legend
+                const topLevelGroups = [];
+                fields.forEach((field, idx) => {
+                    const groupRanges = flattenedRanges.filter(r => r.topLevelIndex === idx);
+                    if (groupRanges.length > 0) {
+                        topLevelGroups.push({
+                            name: field.name,
+                            color: colors[idx % colors.length],
+                            ranges: groupRanges
+                        });
+                    }
+                });
+                
+                // Calculate SVG dimensions
+                const numLines = Math.ceil(data.length / bytesPerLine);
+                const hexViewHeight = numLines * lineHeight + headerHeight;
+                
+                // Legend height based on number of ranges (not groups)
+                const legendHeight = flattenedRanges.length * 25 + 40;
+                const totalHeight = hexViewHeight + legendHeight + margin * 3;
+                const totalWidth = offsetWidth + hexWidth + margin * 4;
+                
+                console.log(`SVG Export: ${flattenedRanges.length} ranges in ${topLevelGroups.length} top-level groups`);
                 
                 let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${totalWidth}" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
@@ -2426,7 +2450,7 @@ format_struct = Struct(
   <g transform="translate(${margin}, ${headerHeight})">
 `;
                 
-                // Draw hex dump with highlights
+                // Draw hex dump with highlights using top-level coloring
                 for (let i = 0; i < data.length; i += bytesPerLine) {
                     const lineNum = Math.floor(i / bytesPerLine);
                     const y = lineNum * lineHeight + 20;
@@ -2440,27 +2464,18 @@ format_struct = Struct(
                         const x = offsetWidth + j * charWidth * 3;
                         const byteIndex = i + j;
                         
-                        // Find which field this byte belongs to
-                        let fieldColor = null;
-                        let fieldIndex = -1;
-                        const checkFields = (flds, idx = 0) => {
-                            for (let f = 0; f < flds.length; f++) {
-                                const field = flds[f];
-                                if (byteIndex >= field.offset && byteIndex < field.offset + field.length) {
-                                    fieldColor = colors[(idx + f) % colors.length];
-                                    fieldIndex = idx + f;
-                                    return true;
-                                }
-                                if (field.children) {
-                                    if (checkFields(field.children, idx + f + 1)) return true;
-                                }
+                        // Find which range this byte belongs to
+                        let rangeColor = null;
+                        for (let r = 0; r < flattenedRanges.length; r++) {
+                            const range = flattenedRanges[r];
+                            if (byteIndex >= range.offset && byteIndex < range.offset + range.length) {
+                                rangeColor = colors[range.topLevelIndex % colors.length];
+                                break;
                             }
-                            return false;
-                        };
-                        checkFields(fields);
+                        }
                         
-                        if (fieldColor) {
-                            svg += `    <rect x="${x - 2}" y="${y - 14}" width="${charWidth * 2.5}" height="16" fill="${fieldColor}" opacity="0.3" rx="2"/>\n`;
+                        if (rangeColor) {
+                            svg += `    <rect x="${x - 2}" y="${y - 14}" width="${charWidth * 2.5}" height="16" fill="${rangeColor}" opacity="0.3" rx="2"/>\n`;
                         }
                         
                         svg += `    <text x="${x}" y="${y}" class="hex">${byte.toString(16).padStart(2, '0').toUpperCase()}</text>\n`;
@@ -2469,34 +2484,32 @@ format_struct = Struct(
                 
                 svg += `  </g>\n`;
                 
-                // Legend
+                // Legend - grouped by top-level structure
                 const legendY = hexViewHeight + margin * 2;
                 svg += `  <g transform="translate(${margin}, ${legendY})">
-    <text x="0" y="0" class="title" font-size="14">Parsed Fields</text>
+    <text x="0" y="0" class="title" font-size="14">Parsed Fields (Colored by Top-Level Structure)</text>
 `;
                 
-                // Flatten fields with depth for proper display
-                const flatFields = [];
-                const flatten = (flds, depth = 0) => {
-                    flds.forEach((f, idx) => {
-                        flatFields.push({ ...f, depth, colorIdx: flatFields.length });
-                        if (f.children) flatten(f.children, depth + 1);
-                    });
-                };
-                flatten(fields);
-                
-                flatFields.forEach((field, idx) => {
-                    const y = (idx + 1) * 25 + 10;
-                    const color = colors[field.colorIdx % colors.length];
-                    const indent = field.depth * 15;
+                let currentY = 10;
+                topLevelGroups.forEach((group) => {
+                    // Group header
+                    currentY += 25;
+                    svg += `    <rect x="0" y="${currentY - 12}" width="12" height="12" fill="${group.color}" opacity="0.6" rx="2"/>\n`;
+                    svg += `    <text x="18" y="${currentY}" class="field-name" font-weight="600">${group.name}</text>\n`;
                     
-                    svg += `    <rect x="${indent}" y="${y - 12}" width="12" height="12" fill="${color}" opacity="0.6" rx="2"/>\n`;
-                    svg += `    <text x="${indent + 18}" y="${y}" class="field-name">${field.name}</text>\n`;
-                    svg += `    <text x="${indent + 200}" y="${y}" class="field-value">@0x${field.offset.toString(16).padStart(4, '0')} (${field.length} bytes)</text>\n`;
-                    if (field.value) {
-                        const displayValue = field.value.length > 40 ? field.value.substring(0, 40) + '...' : field.value;
-                        svg += `    <text x="${indent + 350}" y="${y}" class="field-value">${displayValue}</text>\n`;
-                    }
+                    // Group members (indented)
+                    group.ranges.forEach((range) => {
+                        currentY += 20;
+                        const fieldValue = range.value || '';
+                        
+                        svg += `    <rect x="20" y="${currentY - 10}" width="8" height="8" fill="${group.color}" opacity="0.4" rx="1"/>\n`;
+                        svg += `    <text x="35" y="${currentY}" class="field-value" font-size="11">${range.name}</text>\n`;
+                        svg += `    <text x="250" y="${currentY}" class="field-value">@0x${range.offset.toString(16).padStart(4, '0')} (${range.length} bytes)</text>\n`;
+                        if (fieldValue) {
+                            const displayValue = fieldValue.length > 30 ? fieldValue.substring(0, 30) + '...' : fieldValue;
+                            svg += `    <text x="450" y="${currentY}" class="field-value">${displayValue}</text>\n`;
+                        }
+                    });
                 });
                 
                 svg += `  </g>\n`;
