@@ -34,10 +34,11 @@
             padding: 2px 4px;
             margin: 0;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all 0.2s ease;
             color: #8b949e;
             background: rgba(110, 118, 129, 0.05);
             font-size: 14px;
+            position: relative;
         }
         
         .hex-cell:hover {
@@ -62,7 +63,8 @@
             opacity: 0.8;
             padding: 2px 1px;
             font-size: 14px;
-            transition: all 0.15s;
+            transition: all 0.2s ease;
+            position: relative;
         }
         
         .field-highlight-0 { 
@@ -70,40 +72,104 @@
             box-shadow: 0 0 8px rgba(248, 81, 73, 0.6), inset 0 0 4px rgba(248, 81, 73, 0.3);
             color: #ff9b97 !important;
         }
+        .field-highlight-0.hovered {
+            background: rgba(248, 81, 73, 0.7) !important;
+            box-shadow: 0 0 16px rgba(248, 81, 73, 1), inset 0 0 8px rgba(248, 81, 73, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
+        }
         .field-highlight-1 { 
             background: rgba(246, 173, 85, 0.4); 
             box-shadow: 0 0 8px rgba(246, 173, 85, 0.6), inset 0 0 4px rgba(246, 173, 85, 0.3);
             color: #ffc98e !important;
+        }
+        .field-highlight-1.hovered {
+            background: rgba(246, 173, 85, 0.7) !important;
+            box-shadow: 0 0 16px rgba(246, 173, 85, 1), inset 0 0 8px rgba(246, 173, 85, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
         }
         .field-highlight-2 { 
             background: rgba(87, 171, 90, 0.4); 
             box-shadow: 0 0 8px rgba(87, 171, 90, 0.6), inset 0 0 4px rgba(87, 171, 90, 0.3);
             color: #a0e3a3 !important;
         }
+        .field-highlight-2.hovered {
+            background: rgba(87, 171, 90, 0.7) !important;
+            box-shadow: 0 0 16px rgba(87, 171, 90, 1), inset 0 0 8px rgba(87, 171, 90, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
+        }
         .field-highlight-3 { 
             background: rgba(88, 166, 255, 0.4); 
             box-shadow: 0 0 8px rgba(88, 166, 255, 0.6), inset 0 0 4px rgba(88, 166, 255, 0.3);
             color: #a8d4ff !important;
+        }
+        .field-highlight-3.hovered {
+            background: rgba(88, 166, 255, 0.7) !important;
+            box-shadow: 0 0 16px rgba(88, 166, 255, 1), inset 0 0 8px rgba(88, 166, 255, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
         }
         .field-highlight-4 { 
             background: rgba(188, 128, 240, 0.4); 
             box-shadow: 0 0 8px rgba(188, 128, 240, 0.6), inset 0 0 4px rgba(188, 128, 240, 0.3);
             color: #d4b3ff !important;
         }
+        .field-highlight-4.hovered {
+            background: rgba(188, 128, 240, 0.7) !important;
+            box-shadow: 0 0 16px rgba(188, 128, 240, 1), inset 0 0 8px rgba(188, 128, 240, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
+        }
         .field-highlight-5 { 
             background: rgba(255, 121, 198, 0.4); 
             box-shadow: 0 0 8px rgba(255, 121, 198, 0.6), inset 0 0 4px rgba(255, 121, 198, 0.3);
             color: #ffa3d9 !important;
+        }
+        .field-highlight-5.hovered {
+            background: rgba(255, 121, 198, 0.7) !important;
+            box-shadow: 0 0 16px rgba(255, 121, 198, 1), inset 0 0 8px rgba(255, 121, 198, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
         }
         .field-highlight-6 { 
             background: rgba(121, 192, 255, 0.4); 
             box-shadow: 0 0 8px rgba(121, 192, 255, 0.6), inset 0 0 4px rgba(121, 192, 255, 0.3);
             color: #b3d9ff !important;
         }
+        .field-highlight-6.hovered {
+            background: rgba(121, 192, 255, 0.7) !important;
+            box-shadow: 0 0 16px rgba(121, 192, 255, 1), inset 0 0 8px rgba(121, 192, 255, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
+        }
         .field-highlight-7 { 
             background: rgba(255, 158, 100, 0.4); 
             box-shadow: 0 0 8px rgba(255, 158, 100, 0.6), inset 0 0 4px rgba(255, 158, 100, 0.3);
             color: #ffb380 !important;
+        }
+        .field-highlight-7.hovered {
+            background: rgba(255, 158, 100, 0.7) !important;
+            box-shadow: 0 0 16px rgba(255, 158, 100, 1), inset 0 0 8px rgba(255, 158, 100, 0.6) !important;
+            color: #fff !important;
+            font-weight: 700 !important;
+            transform: scale(1.05);
+            z-index: 10;
         }
         
         .tree-node {
@@ -633,7 +699,7 @@ json.dumps(result)
         };
 
         // Hex View Component with Virtual Scrolling
-        const HexView = ({ data, highlightRanges = [], onByteClick, selectedField }) => {
+        const HexView = ({ data, highlightRanges = [], onByteClick, selectedField, hoveredField }) => {
             const [scrollTop, setScrollTop] = useState(0);
             const containerRef = useRef(null);
             
@@ -655,10 +721,16 @@ json.dumps(result)
             };
 
             const getHighlightClass = (byteIndex) => {
+                // Check if this byte is in the hovered field
+                const isHovered = hoveredField && 
+                                  byteIndex >= hoveredField.offset && 
+                                  byteIndex < hoveredField.offset + hoveredField.length;
+                
                 for (let i = 0; i < highlightRanges.length; i++) {
                     const range = highlightRanges[i];
                     if (byteIndex >= range.offset && byteIndex < range.offset + range.length) {
-                        return `field-highlight-${i % 8}`;
+                        const baseClass = `field-highlight-${i % 8}`;
+                        return isHovered ? `${baseClass} hovered` : baseClass;
                     }
                 }
                 return '';
@@ -1169,7 +1241,7 @@ json.dumps(result)
         };
 
         // Structure Tree Component
-        const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit }) => {
+        const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit, onHover }) => {
             const [expanded, setExpanded] = useState(true);
             const hasChildren = node.children && node.children.length > 0;
             const isSelected = JSON.stringify(currentPath) === JSON.stringify(selectedPath);
@@ -1182,6 +1254,8 @@ json.dumps(result)
                 <div>
                     <div
                         className={`tree-node ${hasChildren ? 'expandable' : ''} ${expanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}`}
+                        onMouseEnter={() => onHover && onHover(node)}
+                        onMouseLeave={() => onHover && onHover(null)}
                     >
                         <div
                             onClick={(e) => {
@@ -1230,6 +1304,7 @@ json.dumps(result)
                                     selectedPath={selectedPath}
                                     currentPath={[...currentPath, idx]}
                                     onEdit={onEdit}
+                                    onHover={onHover}
                                 />
                             ))}
                         </div>
@@ -1238,7 +1313,7 @@ json.dumps(result)
             );
         };
 
-        const StructureTree = ({ fields, onFieldSelect, selectedField, onFieldEdit }) => {
+        const StructureTree = ({ fields, onFieldSelect, selectedField, onFieldEdit, onFieldHover }) => {
             const [selectedPath, setSelectedPath] = useState(null);
             
             const handleSelect = (node, path) => {
@@ -1261,6 +1336,7 @@ json.dumps(result)
                                 selectedPath={selectedPath}
                                 currentPath={[idx]}
                                 onEdit={onFieldEdit}
+                                onHover={onFieldHover}
                             />
                         ))
                     )}
@@ -1285,6 +1361,7 @@ format_struct = Struct(
 )`);
             const [parsedFields, setParsedFields] = useState([]);
             const [selectedField, setSelectedField] = useState(null);
+            const [hoveredField, setHoveredField] = useState(null);
             const [highlightRanges, setHighlightRanges] = useState([]);
             const [isLoading, setIsLoading] = useState(true);
             const [isParsing, setIsParsing] = useState(false);
@@ -1609,6 +1686,10 @@ format_struct = Struct(
 
             const handleFieldSelect = (field) => {
                 setSelectedField(field);
+            };
+            
+            const handleFieldHover = (field) => {
+                setHoveredField(field);
             };
             
             const handleFieldEdit = (field) => {
@@ -2077,6 +2158,7 @@ format_struct = Struct(
                                         onFieldSelect={handleFieldSelect}
                                         selectedField={selectedField}
                                         onFieldEdit={handleFieldEdit}
+                                        onFieldHover={handleFieldHover}
                                     />
                                 </div>
                             </div>
@@ -2094,6 +2176,7 @@ format_struct = Struct(
                                         data={fileData}
                                         highlightRanges={highlightRanges}
                                         selectedField={selectedField}
+                                        hoveredField={hoveredField}
                                     />
                                 ) : (
                                     <div className="h-full flex items-center justify-center">
