@@ -2753,6 +2753,8 @@ format_struct = Struct(
                                                     setStructDef(template.code);
                                                     setParseStatus(`>>> Loaded: ${template.name}`);
                                                     setError(null); // Clear any previous errors
+                                                    // Reset dropdown to allow re-selection
+                                                    e.target.value = "";
                                                 } else if (templateKey) {
                                                     console.error('❌ Template not found in library:', templateKey);
                                                     console.log('Available templates:', Object.keys(CONSTRUCT_LIBRARY).sort());
@@ -2760,7 +2762,7 @@ format_struct = Struct(
                                                     setError(`Template "${templateKey}" exists in dropdown but not in CONSTRUCT_LIBRARY. This is a bug.`);
                                                 }
                                             }}
-                                            defaultValue=""
+                                            value=""
                                         >
                                             <option value="">-- Select a template --</option>
                                             <optgroup label="📡 Network - Full Stack">
