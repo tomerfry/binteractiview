@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BinTV Web - Binary Structure Viewer</title>
+    <title>BinTV Web - Binary Structure Viewer (Focused Edition)</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -428,6 +428,458 @@
 </head>
 <body>
     <div id="root"></div>
+
+    <script>
+        // Construct Library - Focused, Dynamic Templates
+        const CONSTRUCT_LIBRARY = {
+            // ===== NETWORK - Full Stack Protocols =====
+            
+            "full_tcp": {
+                name: "Full TCP Packet (Eth+IP+TCP)",
+                description: "Complete TCP packet: Ethernet + IPv4 + TCP headers",
+                category: "Network",
+                code: `# Full TCP Packet (Ethernet + IPv4 + TCP Headers)
+format_struct = Struct(
+    # Ethernet Layer
+    "ethernet" / Struct(
+        "dst_mac" / Bytes(6),
+        "src_mac" / Bytes(6),
+        "ethertype" / Int16ub,
+    ),
+    # IPv4 Layer (no options for simplicity, use IHL=5)
+    "ipv4" / Struct(
+        "version_ihl" / Int8ub,
+        "dscp_ecn" / Int8ub,
+        "total_length" / Int16ub,
+        "identification" / Int16ub,
+        "flags_fragment" / Int16ub,
+        "ttl" / Int8ub,
+        "protocol" / Int8ub,
+        "checksum" / Int16ub,
+        "src_ip" / Bytes(4),
+        "dst_ip" / Bytes(4),
+    ),
+    # TCP Layer (no options for simplicity)
+    "tcp" / Struct(
+        "src_port" / Int16ub,
+        "dst_port" / Int16ub,
+        "seq_num" / Int32ub,
+        "ack_num" / Int32ub,
+        "data_offset_flags" / Int16ub,
+        "window_size" / Int16ub,
+        "checksum" / Int16ub,
+        "urgent_pointer" / Int16ub,
+    ),
+    # Payload follows
+)`
+            },
+            
+            "full_udp": {
+                name: "Full UDP Packet (Eth+IP+UDP)",
+                description: "Complete UDP packet: Ethernet + IPv4 + UDP with payload",
+                category: "Network",
+                code: `# Full UDP Packet with Dynamic Payload
+format_struct = Struct(
+    # Ethernet Layer
+    "ethernet" / Struct(
+        "dst_mac" / Bytes(6),
+        "src_mac" / Bytes(6),
+        "ethertype" / Int16ub,
+    ),
+    # IPv4 Layer
+    "ipv4" / Struct(
+        "version_ihl" / Int8ub,
+        "dscp_ecn" / Int8ub,
+        "total_length" / Int16ub,
+        "identification" / Int16ub,
+        "flags_fragment" / Int16ub,
+        "ttl" / Int8ub,
+        "protocol" / Int8ub,
+        "checksum" / Int16ub,
+        "src_ip" / Bytes(4),
+        "dst_ip" / Bytes(4),
+    ),
+    # UDP Layer
+    "udp" / Struct(
+        "src_port" / Int16ub,
+        "dst_port" / Int16ub,
+        "length" / Int16ub,
+        "checksum" / Int16ub,
+        "payload" / Bytes(this.length.value - 8),
+    ),
+)`
+            },
+            
+            "full_dns": {
+                name: "Full DNS Packet (Eth+IP+UDP+DNS)",
+                description: "Complete DNS query/response with header",
+                category: "Network",
+                code: `# Full DNS Packet
+format_struct = Struct(
+    # Ethernet Layer
+    "ethernet" / Struct(
+        "dst_mac" / Bytes(6),
+        "src_mac" / Bytes(6),
+        "ethertype" / Int16ub,
+    ),
+    # IPv4 Layer
+    "ipv4" / Struct(
+        "version_ihl" / Int8ub,
+        "dscp_ecn" / Int8ub,
+        "total_length" / Int16ub,
+        "identification" / Int16ub,
+        "flags_fragment" / Int16ub,
+        "ttl" / Int8ub,
+        "protocol" / Int8ub,
+        "checksum" / Int16ub,
+        "src_ip" / Bytes(4),
+        "dst_ip" / Bytes(4),
+    ),
+    # UDP Layer
+    "udp" / Struct(
+        "src_port" / Int16ub,
+        "dst_port" / Int16ub,
+        "length" / Int16ub,
+        "checksum" / Int16ub,
+    ),
+    # DNS Layer
+    "dns" / Struct(
+        "transaction_id" / Int16ub,
+        "flags" / Int16ub,
+        "questions" / Int16ub,
+        "answer_rrs" / Int16ub,
+        "authority_rrs" / Int16ub,
+        "additional_rrs" / Int16ub,
+        # Questions/Answers follow (variable length DNS names)
+    ),
+)`
+            },
+            
+            "full_dhcp": {
+                name: "Full DHCP Packet (Eth+IP+UDP+DHCP)",
+                description: "Complete DHCP message with dynamic hardware address",
+                category: "Network",
+                code: `# Full DHCP Packet
+format_struct = Struct(
+    # Ethernet Layer
+    "ethernet" / Struct(
+        "dst_mac" / Bytes(6),
+        "src_mac" / Bytes(6),
+        "ethertype" / Int16ub,
+    ),
+    # IPv4 Layer
+    "ipv4" / Struct(
+        "version_ihl" / Int8ub,
+        "dscp_ecn" / Int8ub,
+        "total_length" / Int16ub,
+        "identification" / Int16ub,
+        "flags_fragment" / Int16ub,
+        "ttl" / Int8ub,
+        "protocol" / Int8ub,
+        "checksum" / Int16ub,
+        "src_ip" / Bytes(4),
+        "dst_ip" / Bytes(4),
+    ),
+    # UDP Layer
+    "udp" / Struct(
+        "src_port" / Int16ub,
+        "dst_port" / Int16ub,
+        "length" / Int16ub,
+        "checksum" / Int16ub,
+    ),
+    # DHCP Layer
+    "dhcp" / Struct(
+        "op" / Int8ub,
+        "htype" / Int8ub,
+        "hlen" / Int8ub,
+        "hops" / Int8ub,
+        "xid" / Int32ub,
+        "secs" / Int16ub,
+        "flags" / Int16ub,
+        "ciaddr" / Bytes(4),
+        "yiaddr" / Bytes(4),
+        "siaddr" / Bytes(4),
+        "giaddr" / Bytes(4),
+        "chaddr" / Bytes(this.hlen.value),
+        "chaddr_padding" / Bytes(16 - this.hlen.value),
+        "sname" / Bytes(64),
+        "file" / Bytes(128),
+        "magic_cookie" / Bytes(4),
+        # DHCP options follow (TLV: type-length-value)
+    ),
+)`
+            },
+            
+            "full_arp": {
+                name: "Full ARP Packet (Eth+ARP)",
+                description: "Complete ARP request/reply with dynamic addresses",
+                category: "Network",
+                code: `# Full ARP Packet
+format_struct = Struct(
+    # Ethernet Layer
+    "ethernet" / Struct(
+        "dst_mac" / Bytes(6),
+        "src_mac" / Bytes(6),
+        "ethertype" / Int16ub,
+    ),
+    # ARP Layer
+    "arp" / Struct(
+        "htype" / Int16ub,
+        "ptype" / Int16ub,
+        "hlen" / Int8ub,
+        "plen" / Int8ub,
+        "operation" / Int16ub,
+        "sender_mac" / Bytes(this.hlen.value),
+        "sender_ip" / Bytes(this.plen.value),
+        "target_mac" / Bytes(this.hlen.value),
+        "target_ip" / Bytes(this.plen.value),
+    ),
+)`
+            },
+            
+            // ===== FILES - Executables & Archives =====
+            
+            "elf": {
+                name: "ELF Header (64-bit)",
+                description: "ELF executable/library header with program headers",
+                category: "Files",
+                code: `# ELF 64-bit Header
+format_struct = Struct(
+    "magic" / Bytes(4),
+    "class" / Int8ub,
+    "endian" / Int8ub,
+    "version" / Int8ub,
+    "osabi" / Int8ub,
+    "abiversion" / Int8ub,
+    "padding" / Bytes(7),
+    "type" / Int16ul,
+    "machine" / Int16ul,
+    "version2" / Int32ul,
+    "entry" / Int64ul,
+    "phoff" / Int64ul,
+    "shoff" / Int64ul,
+    "flags" / Int32ul,
+    "ehsize" / Int16ul,
+    "phentsize" / Int16ul,
+    "phnum" / Int16ul,
+    "shentsize" / Int16ul,
+    "shnum" / Int16ul,
+    "shstrndx" / Int16ul,
+)`
+            },
+            
+            "pe": {
+                name: "PE Header (Windows)",
+                description: "PE/COFF executable header (DOS + PE)",
+                category: "Files",
+                code: `# PE Header (DOS Stub + PE Signature)
+format_struct = Struct(
+    # DOS Header
+    "dos_magic" / Bytes(2),
+    "dos_lastsize" / Int16ul,
+    "dos_nblocks" / Int16ul,
+    "dos_nreloc" / Int16ul,
+    "dos_hdrsize" / Int16ul,
+    "dos_minalloc" / Int16ul,
+    "dos_maxalloc" / Int16ul,
+    "dos_ss" / Int16ul,
+    "dos_sp" / Int16ul,
+    "dos_checksum" / Int16ul,
+    "dos_ip" / Int16ul,
+    "dos_cs" / Int16ul,
+    "dos_lfarlc" / Int16ul,
+    "dos_ovno" / Int16ul,
+    "dos_res" / Bytes(8),
+    "dos_oemid" / Int16ul,
+    "dos_oeminfo" / Int16ul,
+    "dos_res2" / Bytes(20),
+    "pe_offset" / Int32ul,
+)`
+            },
+            
+            "zip": {
+                name: "ZIP Local File Header",
+                description: "ZIP archive local file header with dynamic filename and extra fields",
+                category: "Files",
+                code: `# ZIP Local File Header (Dynamic)
+format_struct = Struct(
+    "signature" / Bytes(4),
+    "version" / Int16ul,
+    "flags" / Int16ul,
+    "compression" / Int16ul,
+    "mod_time" / Int16ul,
+    "mod_date" / Int16ul,
+    "crc32" / Int32ul,
+    "compressed_size" / Int32ul,
+    "uncompressed_size" / Int32ul,
+    "filename_length" / Int16ul,
+    "extra_length" / Int16ul,
+    "filename" / Bytes(this.filename_length.value),
+    "extra_field" / Bytes(this.extra_length.value),
+    # Compressed data follows
+)`
+            },
+            
+            "gzip": {
+                name: "GZIP Header",
+                description: "GZIP compression header with dynamic filename/comment",
+                category: "Files",
+                code: `# GZIP Header (Dynamic)
+format_struct = Struct(
+    "magic" / Bytes(2),
+    "method" / Int8ub,
+    "flags" / Int8ub,
+    "mtime" / Int32ul,
+    "extra_flags" / Int8ub,
+    "os" / Int8ub,
+    # If flags & 0x04: extra field follows (2-byte length + data)
+    # If flags & 0x08: null-terminated filename follows
+    # If flags & 0x10: null-terminated comment follows
+)`
+            },
+            
+            "tar": {
+                name: "TAR Header (POSIX)",
+                description: "POSIX TAR archive header with filename and metadata",
+                category: "Files",
+                code: `# TAR Header (POSIX/ustar)
+format_struct = Struct(
+    "name" / Bytes(100),
+    "mode" / Bytes(8),
+    "uid" / Bytes(8),
+    "gid" / Bytes(8),
+    "size" / Bytes(12),
+    "mtime" / Bytes(12),
+    "checksum" / Bytes(8),
+    "typeflag" / Bytes(1),
+    "linkname" / Bytes(100),
+    "magic" / Bytes(6),
+    "version" / Bytes(2),
+    "uname" / Bytes(32),
+    "gname" / Bytes(32),
+    "devmajor" / Bytes(8),
+    "devminor" / Bytes(8),
+    "prefix" / Bytes(155),
+    "padding" / Bytes(12),
+    # File data follows (size field indicates length)
+)`
+            },
+            
+            "png": {
+                name: "PNG Chunk",
+                description: "PNG image chunk with dynamic data field",
+                category: "Files",
+                code: `# PNG Chunk (Dynamic)
+format_struct = Struct(
+    "length" / Int32ub,
+    "type" / Bytes(4),
+    "data" / Bytes(this.length.value),
+    "crc" / Int32ub,
+)`
+            },
+            
+            "jpeg": {
+                name: "JPEG Segment",
+                description: "JPEG image segment with dynamic data",
+                category: "Files",
+                code: `# JPEG Segment (Dynamic)
+format_struct = Struct(
+    "marker" / Bytes(2),
+    "length" / Int16ub,
+    "data" / Bytes(this.length.value - 2),
+)`
+            },
+            
+            // ===== FIRMWARE - Filesystems & Images =====
+            
+            "squashfs": {
+                name: "SquashFS Superblock",
+                description: "SquashFS compressed filesystem superblock",
+                category: "Firmware",
+                code: `# SquashFS Superblock
+format_struct = Struct(
+    "magic" / Bytes(4),
+    "inode_count" / Int32ul,
+    "mtime" / Int32ul,
+    "block_size" / Int32ul,
+    "fragment_count" / Int32ul,
+    "compression" / Int16ul,
+    "block_log" / Int16ul,
+    "flags" / Int16ul,
+    "id_count" / Int16ul,
+    "version_major" / Int16ul,
+    "version_minor" / Int16ul,
+    "root_inode" / Int64ul,
+    "bytes_used" / Int64ul,
+    "id_table_start" / Int64ul,
+    "xattr_table_start" / Int64ul,
+    "inode_table_start" / Int64ul,
+    "directory_table_start" / Int64ul,
+    "fragment_table_start" / Int64ul,
+    "lookup_table_start" / Int64ul,
+)`
+            },
+            
+            "ext4": {
+                name: "EXT2/3/4 Superblock",
+                description: "EXT filesystem superblock (compatible with ext2/ext3/ext4)",
+                category: "Firmware",
+                code: `# EXT2/3/4 Superblock
+format_struct = Struct(
+    "inodes_count" / Int32ul,
+    "blocks_count" / Int32ul,
+    "r_blocks_count" / Int32ul,
+    "free_blocks_count" / Int32ul,
+    "free_inodes_count" / Int32ul,
+    "first_data_block" / Int32ul,
+    "log_block_size" / Int32ul,
+    "log_frag_size" / Int32ul,
+    "blocks_per_group" / Int32ul,
+    "frags_per_group" / Int32ul,
+    "inodes_per_group" / Int32ul,
+    "mtime" / Int32ul,
+    "wtime" / Int32ul,
+    "mnt_count" / Int16ul,
+    "max_mnt_count" / Int16ul,
+    "magic" / Int16ul,
+    "state" / Int16ul,
+    "errors" / Int16ul,
+    "minor_rev_level" / Int16ul,
+    "lastcheck" / Int32ul,
+    "checkinterval" / Int32ul,
+    "creator_os" / Int32ul,
+    "rev_level" / Int32ul,
+    "def_resuid" / Int16ul,
+    "def_resgid" / Int16ul,
+)`
+            },
+            
+            "cpio": {
+                name: "CPIO Archive (newc)",
+                description: "CPIO archive header (newc format, common in initramfs)",
+                category: "Firmware",
+                code: `# CPIO Archive Header (newc format)
+format_struct = Struct(
+    "magic" / Bytes(6),
+    "ino" / Bytes(8),
+    "mode" / Bytes(8),
+    "uid" / Bytes(8),
+    "gid" / Bytes(8),
+    "nlink" / Bytes(8),
+    "mtime" / Bytes(8),
+    "filesize" / Bytes(8),
+    "devmajor" / Bytes(8),
+    "devminor" / Bytes(8),
+    "rdevmajor" / Bytes(8),
+    "rdevminor" / Bytes(8),
+    "namesize" / Bytes(8),
+    "check" / Bytes(8),
+    # Filename follows (namesize bytes)
+    # File data follows (filesize bytes)
+)`
+            },
+        };
+    </script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback } = React;
@@ -1462,6 +1914,21 @@ format_struct = Struct(
                 initPyodide().then(() => {
                     setIsLoading(false);
                     setParseStatus('>>> Python environment ready');
+                    
+                    // Template library diagnostics
+                    console.log('📚 CONSTRUCT_LIBRARY loaded with', Object.keys(CONSTRUCT_LIBRARY).length, 'templates');
+                    console.log('Available templates:', Object.keys(CONSTRUCT_LIBRARY).sort().join(', '));
+                    
+                    // Check URL parameters for template
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const template = urlParams.get('template');
+                    if (template && CONSTRUCT_LIBRARY[template]) {
+                        setStructDef(CONSTRUCT_LIBRARY[template].code);
+                        setParseStatus(`>>> Loaded template: ${CONSTRUCT_LIBRARY[template].name}`);
+                    } else if (template) {
+                        console.error('Template from URL not found:', template);
+                        setParseStatus(`>>> Error: Template "${template}" not found`);
+                    }
                 }).catch(err => {
                     setError('Failed to initialize Pyodide: ' + err.message);
                     setIsLoading(false);
@@ -2263,6 +2730,68 @@ format_struct = Struct(
                                 </div>
                             </div>
                             
+                            {/* Template Selector */}
+                            <div className="p-2" style={{ borderBottom: '1px solid #30363d', background: '#161b22' }}>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <label className="text-xs" style={{ color: '#8b949e' }}>Load Template:</label>
+                                    <div className="flex-1 flex items-center gap-1">
+                                        <select
+                                            className="flex-1 px-2 py-1 text-xs rounded"
+                                            style={{ 
+                                                background: '#0d1117', 
+                                                border: '1px solid #30363d', 
+                                                color: '#c9d1d9',
+                                                cursor: 'pointer'
+                                            }}
+                                            onChange={(e) => {
+                                                const templateKey = e.target.value;
+                                                console.log('📋 Template selected:', templateKey);
+                                                
+                                                if (templateKey && CONSTRUCT_LIBRARY[templateKey]) {
+                                                    const template = CONSTRUCT_LIBRARY[templateKey];
+                                                    console.log('✅ Loading template:', template.name);
+                                                    setStructDef(template.code);
+                                                    setParseStatus(`>>> Loaded: ${template.name}`);
+                                                    setError(null); // Clear any previous errors
+                                                } else if (templateKey) {
+                                                    console.error('❌ Template not found in library:', templateKey);
+                                                    console.log('Available templates:', Object.keys(CONSTRUCT_LIBRARY).sort());
+                                                    setParseStatus(`>>> Error: Template "${templateKey}" not found in library`);
+                                                    setError(`Template "${templateKey}" exists in dropdown but not in CONSTRUCT_LIBRARY. This is a bug.`);
+                                                }
+                                            }}
+                                            defaultValue=""
+                                        >
+                                            <option value="">-- Select a template --</option>
+                                            <optgroup label="📡 Network - Full Stack">
+                                                <option value="full_tcp">Full TCP Packet (Eth+IP+TCP)</option>
+                                                <option value="full_udp">Full UDP Packet (Eth+IP+UDP)</option>
+                                                <option value="full_dns">Full DNS Packet (Eth+IP+UDP+DNS)</option>
+                                                <option value="full_dhcp">Full DHCP Packet (Eth+IP+UDP+DHCP)</option>
+                                                <option value="full_arp">Full ARP Packet (Eth+ARP)</option>
+                                            </optgroup>
+                                            <optgroup label="📁 Files - Executables & Archives">
+                                                <option value="elf">ELF Header (64-bit)</option>
+                                                <option value="pe">PE Header (Windows)</option>
+                                                <option value="zip">ZIP Local File Header</option>
+                                                <option value="gzip">GZIP Header</option>
+                                                <option value="tar">TAR Header (POSIX)</option>
+                                                <option value="png">PNG Chunk</option>
+                                                <option value="jpeg">JPEG Segment</option>
+                                            </optgroup>
+                                            <optgroup label="🔧 Firmware - Filesystems">
+                                                <option value="squashfs">SquashFS Superblock</option>
+                                                <option value="ext4">EXT2/3/4 Superblock</option>
+                                                <option value="cpio">CPIO Archive (newc/initramfs)</option>
+                                            </optgroup>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="text-xs px-1" style={{ color: '#6e7681', lineHeight: '1.4' }}>
+                                    💡 Templates support dynamic fields using <code>this.field.value</code> pattern (e.g., <code>Bytes(this.length.value)</code>)
+                                </div>
+                            </div>
+                            
                             <div className="flex-1 flex flex-col">
                                 <textarea
                                     value={structDef}
@@ -2282,10 +2811,27 @@ format_struct = Struct(
                             
                             {error && (
                                 <div className="m-2 error-box rounded">
-                                    <div className="font-semibold mb-1" style={{ fontSize: '12px' }}>Parse Error:</div>
+                                    <div className="font-semibold mb-1" style={{ fontSize: '12px' }}>⚠️ Parse Error:</div>
                                     <pre className="whitespace-pre-wrap overflow-auto max-h-32" style={{ fontSize: '11px' }}>
                                         {error}
                                     </pre>
+                                    {error.includes('this.') && (
+                                        <div className="mt-2 p-2 rounded" style={{ background: 'rgba(246, 173, 85, 0.1)', border: '1px solid rgba(246, 173, 85, 0.3)' }}>
+                                            <div className="text-xs" style={{ color: '#f6ad55' }}>
+                                                💡 <strong>Hint:</strong> Dynamic fields need <code>.value</code> when wrapped with RawCopy. 
+                                                Use <code>this.field.value</code> instead of <code>this.field</code>.
+                                                <br/>
+                                                Example: <code>Bytes(this.length.value)</code>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {error.includes('not enough bytes') && (
+                                        <div className="mt-2 p-2 rounded" style={{ background: 'rgba(246, 173, 85, 0.1)', border: '1px solid rgba(246, 173, 85, 0.3)' }}>
+                                            <div className="text-xs" style={{ color: '#f6ad55' }}>
+                                                💡 <strong>Hint:</strong> The file is too small for this structure. This template expects more bytes than available.
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             
