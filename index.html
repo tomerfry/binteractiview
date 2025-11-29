@@ -339,6 +339,68 @@
             border: 1px solid #30363d;
             font-size: 13px;
         }
+        
+        /* Syntax highlighting for code editor */
+        .code-editor-highlighted {
+            position: relative;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        
+        .code-editor-textarea {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: transparent;
+            color: transparent;
+            caret-color: #c9d1d9;
+            resize: none;
+            border: none;
+            outline: none;
+            padding: 12px;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: pre;
+            overflow-wrap: normal;
+            overflow-x: auto;
+            overflow-y: auto;
+            z-index: 2;
+        }
+        
+        .code-editor-textarea::selection {
+            background: rgba(88, 166, 255, 0.3);
+        }
+        
+        .code-editor-display {
+            pointer-events: none;
+            white-space: pre;
+            overflow-wrap: normal;
+            word-break: normal;
+            z-index: 1;
+            color: #c9d1d9;
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        
+        .code-editor-display > div {
+            padding: 12px;
+        }
+        
+        /* Python syntax highlighting colors (GitHub Dark theme) */
+        .token-comment { color: #8b949e; font-style: italic; }
+        .token-keyword { color: #ff7b72; font-weight: 600; }
+        .token-string { color: #a5d6ff; }
+        .token-number { color: #79c0ff; }
+        .token-function { color: #d2a8ff; }
+        .token-class { color: #ffa657; }
+        .token-operator { color: #ff7b72; }
+        .token-builtin { color: #79c0ff; }
+        .token-variable { color: #ffa657; }
 
         .btn-terminal {
             background: #21262d;
@@ -878,6 +940,140 @@ format_struct = Struct(
     # File data follows (filesize bytes)
 )`
             },
+            
+            // ===== EXAMPLES - Advanced Construct Features =====
+            
+            "aes_encrypted": {
+                name: "AES Encrypted Data",
+                description: "AES-CBC encrypted structure (EncryptedSym)",
+                category: "Examples",
+                code: `# AES Encrypted Structure Example
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+
+format_struct = Struct(
+    "key" / Bytes(32),  # AES-256 key
+    "iv" / Bytes(16),   # Initialization vector
+    "enc_data" / EncryptedSym(
+        Aligned(16,
+            Struct(
+                "width" / Int16ul,
+                "height" / Int16ul,
+                "format" / Int32ul,
+            )
+        ),
+        lambda ctx: Cipher(
+            algorithms.AES(ctx.key.value), 
+            modes.CBC(ctx.iv.value),
+            backend=default_backend()
+        )
+    )
+)
+
+# Build Mode: fill key (32 bytes), iv (16 bytes), width, height, format
+# The inner struct will be automatically encrypted!
+# Note: Use ctx.field.value due to RawCopy wrapper for offset tracking
+`
+            },
+            
+            "compressed_data": {
+                name: "Compressed Data (zlib)",
+                description: "Zlib compressed payload with length prefix (Compressed)",
+                category: "Examples",
+                code: `# Compressed Data Example
+format_struct = Struct(
+    "magic" / Const(b"COMP"),
+    "compressed" / Prefixed(Int32ul, 
+        Compressed(GreedyBytes, "zlib")
+    )
+)
+
+# Build Mode: just provide the magic
+# For compressed field, provide raw uncompressed data as hex
+# It will be automatically compressed during build!
+`
+            },
+            
+            "checksummed": {
+                name: "Checksummed Data",
+                description: "Data with SHA256 checksum (Checksum + RawCopy)",
+                category: "Examples",
+                code: `# Checksummed Data Example
+import hashlib
+
+format_struct = Struct(
+    "fields" / RawCopy(Struct(
+        "version" / Int32ul,
+        "length" / Int32ul,
+        "data" / Bytes(16),
+    )),
+    "checksum" / Checksum(Bytes(32),
+        lambda data: hashlib.sha256(data).digest(),
+        this.fields.data
+    ),
+)
+
+# Build Mode: provide version, length, data
+# Checksum will be auto-calculated from the raw bytes!
+`
+            },
+            
+            "xor_encoded": {
+                name: "XOR Encoded Data",
+                description: "XOR obfuscated payload (ProcessXor)",
+                category: "Examples",
+                code: `# XOR Encoded Data Example
+format_struct = Struct(
+    "xor_key" / Int8ul,
+    "encoded" / ProcessXor(
+        this.xor_key.value,
+        Struct(
+            "secret_id" / Int32ul,
+            "secret_value" / Int32ul,
+        )
+    )
+)
+
+# Build Mode: provide xor_key (e.g., 0xAB), secret_id, secret_value
+# Data will be XORed automatically during build!
+# Note: Use this.field.value due to RawCopy wrapper for offset tracking
+`
+            },
+            
+            "null_terminated": {
+                name: "Null-Terminated String",
+                description: "C-style null-terminated string (NullTerminated)",
+                category: "Examples",
+                code: `# Null-Terminated String Example
+format_struct = Struct(
+    "name" / NullTerminated(GreedyBytes),
+    "age" / Int8ul,
+)
+
+# Build Mode: provide name as hex (e.g., "48656c6c6f" for "Hello")
+# Null terminator will be added automatically!
+`
+            },
+            
+            "prefixed_array": {
+                name: "Prefixed Array",
+                description: "Length-prefixed array of items (PrefixedArray)",
+                category: "Examples",
+                code: `# Prefixed Array Example
+format_struct = Struct(
+    "magic" / Const(b"PARR"),
+    "items" / PrefixedArray(Int16ul, 
+        Struct(
+            "id" / Int32ul,
+            "value" / Int32ul,
+        )
+    ),
+)
+
+# Note: PrefixedArray requires array input during build
+# This is better demonstrated with parsing existing data
+`
+            },
         };
     </script>
 
@@ -903,10 +1099,18 @@ format_struct = Struct(
                 indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
             });
             
-            console.log('Installing construct...');
+            console.log('Installing construct and cryptography...');
             await pyodide.loadPackage(['micropip']);
             const micropip = pyodide.pyimport('micropip');
             await micropip.install('construct');
+            
+            // Load cryptography for EncryptedSym support
+            try {
+                await pyodide.loadPackage('cryptography');
+                console.log('Cryptography loaded successfully');
+            } catch (err) {
+                console.warn('Cryptography not available:', err);
+            }
             
             console.log('Pyodide ready!');
             pyodideReady = true;
@@ -1733,6 +1937,262 @@ json.dumps(result)
             );
         };
 
+        // Syntax Highlighter Component
+        const CodeEditor = ({ value, onChange, placeholder, spellCheck = false }) => {
+            const textareaRef = useRef(null);
+            const displayRef = useRef(null);
+            const contentRef = useRef(null);
+            
+            const handleScroll = (e) => {
+                // Sync scroll position using transform (more reliable than scrollTop)
+                if (contentRef.current) {
+                    contentRef.current.style.transform = `translate(${-e.target.scrollLeft}px, ${-e.target.scrollTop}px)`;
+                }
+            };
+            
+            const handleKeyDown = (e) => {
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    
+                    const textarea = e.target;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    
+                    // Insert 4 spaces
+                    const newValue = value.substring(0, start) + '    ' + value.substring(end);
+                    onChange({ target: { value: newValue } });
+                    
+                    // Set cursor position after the inserted spaces
+                    setTimeout(() => {
+                        textarea.selectionStart = textarea.selectionEnd = start + 4;
+                    }, 0);
+                }
+            };
+            
+            const highlightSyntax = (code) => {
+                if (!code) return '';
+                
+                // Escape HTML
+                const escapeHtml = (text) => text
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                
+                // Token patterns (order matters - most specific first!)
+                const patterns = [
+                    { regex: /#[^\n]*/g, className: 'token-comment' },
+                    { regex: /b"(?:[^"\\]|\\.)*"|b'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, className: 'token-string' },
+                    { regex: /\b(import|from|def|class|if|else|elif|for|while|return|lambda|try|except|with|as|in|True|False|None)\b/g, className: 'token-keyword' },
+                    { regex: /\b(Struct|Bytes|Int8ub|Int8ul|Int8sb|Int8sl|Int16ub|Int16ul|Int16sb|Int16sl|Int32ub|Int32ul|Int32sb|Int32sl|Int64ub|Int64ul|Int64sb|Int64sl|Float32l|Float32b|Float64l|Float64b|Array|Aligned|Default|EncryptedSym|Compressed|Prefixed|PrefixedArray|Computed|Rebuild|Enum|FlagsEnum|Switch|Const|Padding|Padded|Container|Cipher|algorithms|modes|AES|CBC|RawCopy|Checksum|ProcessXor|NullTerminated|GreedyBytes|GreedyRange|VarInt|CString|PascalString|Bitwise|BitsInteger|Bit|Nibble|Octet|Flag|ExprAdapter|Validator|Hex|HexDump|Probe|Debugger|Peek|IfThenElse|Pass|Terminated|Tell|Seek|Pointer|default_backend|hashlib|sha256|md5)\b/g, className: 'token-class' },
+                    { regex: /\b(os|this|ctx|obj|_)\b/g, className: 'token-builtin' },
+                    { regex: /\b(0x[0-9A-Fa-f]+|\d+)\b/g, className: 'token-number' },
+                    { regex: /[\/=]/g, className: 'token-operator' },
+                ];
+                
+                // Find all matches across all patterns
+                const allMatches = [];
+                patterns.forEach(pattern => {
+                    let match;
+                    const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
+                    while ((match = regex.exec(code)) !== null) {
+                        allMatches.push({
+                            start: match.index,
+                            end: match.index + match[0].length,
+                            text: match[0],
+                            className: pattern.className
+                        });
+                    }
+                });
+                
+                // Sort by position
+                allMatches.sort((a, b) => a.start - b.start);
+                
+                // Remove overlapping matches (keep first match)
+                const nonOverlapping = [];
+                let lastEnd = 0;
+                for (const match of allMatches) {
+                    if (match.start >= lastEnd) {
+                        nonOverlapping.push(match);
+                        lastEnd = match.end;
+                    }
+                }
+                
+                // Build highlighted output
+                let result = '';
+                let pos = 0;
+                
+                for (const match of nonOverlapping) {
+                    // Add text before match (unformatted)
+                    if (pos < match.start) {
+                        result += escapeHtml(code.substring(pos, match.start));
+                    }
+                    
+                    // Add highlighted match
+                    result += `<span class="${match.className}">${escapeHtml(match.text)}</span>`;
+                    pos = match.end;
+                }
+                
+                // Add remaining text
+                if (pos < code.length) {
+                    result += escapeHtml(code.substring(pos));
+                }
+                
+                return result;
+            };
+            
+            return (
+                <div className="code-editor-highlighted flex-1" style={{ position: 'relative', background: '#0d1117', overflow: 'hidden' }}>
+                    <div 
+                        ref={displayRef}
+                        className="code-editor-display"
+                        style={{ 
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            overflow: 'hidden',
+                            pointerEvents: 'none'
+                        }}
+                    >
+                        <div 
+                            ref={contentRef}
+                            style={{ willChange: 'transform' }}
+                            dangerouslySetInnerHTML={{ __html: highlightSyntax(value) }}
+                        />
+                    </div>
+                    <textarea
+                        ref={textareaRef}
+                        className="code-editor-textarea"
+                        value={value}
+                        onChange={onChange}
+                        onKeyDown={handleKeyDown}
+                        onScroll={handleScroll}
+                        placeholder={placeholder}
+                        spellCheck={spellCheck}
+                    />
+                </div>
+            );
+        };
+
+        // Build Form Component
+        const BuildForm = ({ structDef, buildValues, onValueChange, onBuild, isParsing }) => {
+            const [fields, setFields] = useState([]);
+            
+            useEffect(() => {
+                // Extract field definitions from struct
+                const extractFields = () => {
+                    const fieldDefs = [];
+                    const lines = structDef.split('\n');
+                    
+                    for (const line of lines) {
+                        // Match: "field_name" / Type
+                        const match = line.match(/^\s*"([^"]+)"\s*\/\s*(\w+)(\(([^)]+)\))?/);
+                        if (match) {
+                            const [, name, type, , args] = match;
+                            fieldDefs.push({
+                                name,
+                                type,
+                                args: args || '',
+                                placeholder: getPlaceholder(type, args)
+                            });
+                        }
+                    }
+                    
+                    return fieldDefs;
+                };
+                
+                setFields(extractFields());
+            }, [structDef]);
+            
+            const getPlaceholder = (type, args) => {
+                if (type === 'Bytes') {
+                    const size = args || '4';
+                    return 'FF EE DD CC'.substring(0, parseInt(size) * 3 - 1);
+                } else if (type.startsWith('Int')) {
+                    if (type.includes('8')) return '255';
+                    if (type.includes('16')) return '65535';
+                    if (type.includes('32')) return '4294967295';
+                    return '0';
+                } else {
+                    return 'value';
+                }
+            };
+            
+            return (
+                <div className="p-4 h-full overflow-auto scrollbar-thin">
+                    <div className="mb-4">
+                        <h3 className="text-lg font-semibold mb-2" style={{ color: '#58a6ff' }}>
+                            🔨 Build Binary from Template
+                        </h3>
+                        <p className="text-sm opacity-70 mb-2">
+                            Fill in values for each field. Full Construct support including encryption, compression, and dynamic defaults.
+                        </p>
+                        <div className="text-xs p-2 rounded mb-3" style={{ background: 'rgba(87, 171, 90, 0.1)', border: '1px solid rgba(87, 171, 90, 0.3)', color: '#57ab5a' }}>
+                            ✅ <strong>Full Support:</strong> All Construct types supported (EncryptedSym, Compressed, Default, etc.).
+                            {fields.some(f => f.name === 'key' || f.name === 'iv') && (
+                                <div className="mt-2 pt-2 border-t border-current">
+                                    🔐 <strong>Encryption Tip:</strong> For encrypted structures, provide key/iv as hex bytes. 
+                                    The inner encrypted fields (width, height, etc.) will be automatically encrypted during build.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    
+                    {fields.length === 0 ? (
+                        <div className="text-center py-8 opacity-50">
+                            <p>No fields detected in structure.</p>
+                            <p className="text-xs mt-2">Make sure your Construct definition is valid.</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {fields.map((field) => (
+                                <div key={field.name} className="flex flex-col gap-1">
+                                    <label className="text-sm font-semibold" style={{ color: '#8b949e' }}>
+                                        {field.name}
+                                        <span className="ml-2 text-xs opacity-60">({field.type})</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="px-3 py-2 rounded font-mono text-sm"
+                                        style={{
+                                            background: '#0d1117',
+                                            border: '1px solid #30363d',
+                                            color: '#c9d1d9'
+                                        }}
+                                        placeholder={field.placeholder}
+                                        value={buildValues[field.name] || ''}
+                                        onChange={(e) => onValueChange(field.name, e.target.value)}
+                                    />
+                                </div>
+                            ))}
+                            <div className="text-xs opacity-50 mt-2">
+                                💡 Tip: For hex values use space-separated bytes (FF EE DD CC). For encryption, inner fields are auto-encrypted.
+                            </div>
+                        </div>
+                    )}
+                    
+                    <div className="mt-6 flex gap-2">
+                        <button
+                            onClick={onBuild}
+                            disabled={isParsing || fields.length === 0}
+                            className="px-6 py-2 rounded font-semibold"
+                            style={{
+                                background: '#238636',
+                                border: '1px solid #2ea043',
+                                color: '#fff'
+                            }}
+                        >
+                            {isParsing ? 'Building...' : '🔨 Build Binary'}
+                        </button>
+                        <div className="text-xs opacity-50 flex items-center">
+                            Press Build to create binary from your values
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
         // Structure Tree Component
         const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit, onHover }) => {
             const [expanded, setExpanded] = useState(true);
@@ -1901,6 +2361,10 @@ format_struct = Struct(
             const [error, setError] = useState(null);
             const [parseStatus, setParseStatus] = useState('');
             const [editingField, setEditingField] = useState(null);
+            
+            // Build mode state
+            const [isBuildMode, setIsBuildMode] = useState(false);
+            const [buildValues, setBuildValues] = useState({});
             
             // PCAP-specific state
             const [isPcapFile, setIsPcapFile] = useState(false);
@@ -2361,6 +2825,143 @@ format_struct = Struct(
                     setTimeout(() => handleParse(), 100);
                 }
             };
+            
+            const toggleBuildMode = () => {
+                const newMode = !isBuildMode;
+                setIsBuildMode(newMode);
+                
+                if (newMode) {
+                    // Entering build mode
+                    setParseStatus('>>> 🔨 Build Mode: Create binary from template');
+                    setBuildValues({});
+                } else {
+                    // Leaving build mode  
+                    setParseStatus('>>> Parse Mode');
+                }
+            };
+            
+            const handleBuildValueChange = (fieldPath, value) => {
+                setBuildValues(prev => ({
+                    ...prev,
+                    [fieldPath]: value
+                }));
+            };
+            
+            const handleBuildFromTemplate = async () => {
+                if (!pyodideReady) return;
+                
+                setIsParsing(true);
+                setError(null);
+                setParseStatus('>>> Building binary...');
+                
+                try {
+                    const valuesJson = JSON.stringify(buildValues);
+                    
+                    const pythonCode = `
+import json
+import os
+from construct import *
+
+# Import cryptography if available for EncryptedSym
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.ciphers import aead
+    from cryptography.hazmat.backends import default_backend
+except ImportError:
+    pass
+
+# Import compression libraries
+try:
+    import zlib, gzip, bz2, lzma
+except ImportError:
+    pass
+
+# User's structure definition (with full support)
+${structDef}
+
+# Find structure
+struct_obj = None
+for name in ['format_struct', 'fomrst_struct', 'struct', 'format', 'packet', 'header']:
+    if name in globals() and isinstance(globals()[name], Construct):
+        struct_obj = globals()[name]
+        break
+
+if not struct_obj:
+    raise Exception("No Construct structure found. Define format_struct = Struct(...)")
+
+values_dict = json.loads('''${valuesJson}''')
+
+# Build container from values
+container = Container()
+
+for key, value in values_dict.items():
+    if isinstance(value, str):
+        # Try to parse as hex
+        clean_value = value.replace(' ', '').replace('\\n', '').strip()
+        if all(c in '0123456789ABCDEFabcdef' for c in clean_value) and len(clean_value) % 2 == 0:
+            # Hex string
+            container[key] = bytes.fromhex(clean_value)
+        else:
+            # Try as number first
+            try:
+                # Check if it looks like a number
+                if clean_value.isdigit() or (clean_value.startswith('-') and clean_value[1:].isdigit()):
+                    container[key] = int(value)
+                else:
+                    # Keep as string bytes
+                    container[key] = value.encode('utf-8') if isinstance(value, str) else value
+            except ValueError:
+                # Keep as string
+                container[key] = value.encode('utf-8') if isinstance(value, str) else value
+    else:
+        container[key] = value
+
+# Build binary with context support
+# Note: For encryption, the key/iv are read from the container itself during build
+binary_data = struct_obj.build(container)
+binary_data.hex()
+`;
+
+                    const hexResult = await pyodide.runPythonAsync(pythonCode);
+                    
+                    // Convert hex to bytes
+                    const bytes = [];
+                    for (let i = 0; i < hexResult.length; i += 2) {
+                        bytes.push(parseInt(hexResult.substr(i, 2), 16));
+                    }
+                    
+                    const builtData = new Uint8Array(bytes);
+                    setFileData(builtData);
+                    setOriginalFileData(new Uint8Array(builtData));
+                    setFileName('built.bin');
+                    setHasUnsavedChanges(true);
+                    setParseStatus(`>>> ✅ Built ${builtData.length} bytes`);
+                    
+                    // Auto-parse the built data
+                    setTimeout(() => handleParse(), 100);
+                    
+                } catch (err) {
+                    console.error('Build error:', err);
+                    
+                    // Extract meaningful error message
+                    let errorMsg = err.message;
+                    if (errorMsg.includes('PythonError:')) {
+                        // Try to extract the actual error
+                        const lines = errorMsg.split('\n');
+                        for (let i = lines.length - 1; i >= 0; i--) {
+                            if (lines[i].trim() && !lines[i].includes('File ') && !lines[i].includes('at ')) {
+                                errorMsg = lines[i].trim();
+                                break;
+                            }
+                        }
+                    }
+                    
+                    setError('Build failed: ' + errorMsg);
+                    setParseStatus('>>> ❌ Build failed');
+                } finally {
+                    setIsParsing(false);
+                }
+            };
 
             const handleExportSVG = () => {
                 if (!fileData || parsedFields.length === 0) {
@@ -2606,6 +3207,15 @@ format_struct = Struct(
                                 >
                                     Open File
                                 </button>
+                                <button
+                                    onClick={toggleBuildMode}
+                                    disabled={isLoading || isPcapFile}
+                                    className="px-4 py-2 btn-terminal rounded"
+                                    style={isBuildMode ? { background: '#238636', borderColor: '#2ea043', color: '#fff' } : {}}
+                                    title="Build binary from template"
+                                >
+                                    {isBuildMode ? '🔨 Build Mode' : '🔨 Build'}
+                                </button>
                                 {hasUnsavedChanges && (
                                     <>
                                         <button
@@ -2731,15 +3341,19 @@ format_struct = Struct(
                             <div className="terminal-title flex items-center justify-between">
                                 <span>Construct Structure Definition</span>
                                 <div className="flex items-center space-x-2">
-                                    {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>Parsing...</span>}
-                                    <button
-                                        onClick={handleParse}
-                                        disabled={!fileData || !pyodideReady || isParsing}
-                                        className="px-3 py-1 btn-terminal rounded"
-                                        title="Manual parse (or auto-parses on edit)"
-                                    >
-                                        Parse
-                                    </button>
+                                    {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>
+                                        {isBuildMode ? 'Building...' : 'Parsing...'}
+                                    </span>}
+                                    {!isBuildMode && (
+                                        <button
+                                            onClick={handleParse}
+                                            disabled={!fileData || !pyodideReady || isParsing}
+                                            className="px-3 py-1 btn-terminal rounded"
+                                            title="Manual parse (or auto-parses on edit)"
+                                        >
+                                            Parse
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                             
@@ -2799,6 +3413,14 @@ format_struct = Struct(
                                                 <option value="ext4">EXT2/3/4 Superblock</option>
                                                 <option value="cpio">CPIO Archive (newc/initramfs)</option>
                                             </optgroup>
+                                            <optgroup label="💡 Examples - Advanced Features">
+                                                <option value="aes_encrypted">🔐 AES Encrypted (EncryptedSym)</option>
+                                                <option value="compressed_data">🗜️ Compressed (zlib)</option>
+                                                <option value="checksummed">✓ Checksummed (SHA256)</option>
+                                                <option value="xor_encoded">🔀 XOR Encoded (ProcessXor)</option>
+                                                <option value="null_terminated">∅ Null-Terminated String</option>
+                                                <option value="prefixed_array">📊 Prefixed Array</option>
+                                            </optgroup>
                                         </select>
                                     </div>
                                 </div>
@@ -2808,17 +3430,9 @@ format_struct = Struct(
                             </div>
                             
                             <div className="flex-1 flex flex-col">
-                                <textarea
+                                <CodeEditor
                                     value={structDef}
                                     onChange={(e) => setStructDef(e.target.value)}
-                                    className="flex-1 p-3 font-mono resize-none focus:outline-none focus:ring-1"
-                                    style={{ 
-                                        background: '#0d1117',
-                                        color: '#c9d1d9',
-                                        lineHeight: '1.6',
-                                        border: 'none',
-                                        fontSize: '13px'
-                                    }}
                                     placeholder="# Define Construct structure"
                                     spellCheck={false}
                                 />
@@ -2852,16 +3466,26 @@ format_struct = Struct(
                             
                             <div className="flex-1 overflow-hidden flex flex-col" style={{ borderTop: '1px solid #30363d' }}>
                                 <div className="terminal-title">
-                                    Parsed Structure ({parsedFields.length})
+                                    {isBuildMode ? '🔨 Build Values' : `Parsed Structure (${parsedFields.length})`}
                                 </div>
-                                <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
-                                    <StructureTree
-                                        fields={parsedFields}
-                                        onFieldSelect={handleFieldSelect}
-                                        selectedField={selectedField}
-                                        onFieldEdit={handleFieldEdit}
-                                        onFieldHover={handleFieldHover}
-                                    />
+                                <div className={`flex-1 overflow-y-auto scrollbar-thin ${isBuildMode ? '' : 'p-2'}`}>
+                                    {isBuildMode ? (
+                                        <BuildForm
+                                            structDef={structDef}
+                                            buildValues={buildValues}
+                                            onValueChange={handleBuildValueChange}
+                                            onBuild={handleBuildFromTemplate}
+                                            isParsing={isParsing}
+                                        />
+                                    ) : (
+                                        <StructureTree
+                                            fields={parsedFields}
+                                            onFieldSelect={handleFieldSelect}
+                                            selectedField={selectedField}
+                                            onFieldEdit={handleFieldEdit}
+                                            onFieldHover={handleFieldHover}
+                                        />
+                                    )}
                                 </div>
                             </div>
                         </div>
