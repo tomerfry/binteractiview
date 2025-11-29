@@ -1323,6 +1323,13 @@ format_struct = Struct(
                 
                 if (!hasRealContent) return;
                 
+                // For PCAP files, parse immediately when packet changes (no debounce)
+                if (isPcapFile) {
+                    handleParse();
+                    return;
+                }
+                
+                // For regular files, use debounced parsing
                 // Clear previous timeout
                 if (parseTimeoutRef.current) {
                     clearTimeout(parseTimeoutRef.current);
@@ -1338,7 +1345,7 @@ format_struct = Struct(
                         clearTimeout(parseTimeoutRef.current);
                     }
                 };
-            }, [structDef, fileData, pyodideReady]);
+            }, [structDef, fileData, pyodideReady, isPcapFile]);
 
             const handleFileUpload = (event) => {
                 const file = event.target.files[0];
@@ -1547,14 +1554,16 @@ format_struct = Struct(
                 if (!isPcapFile || newIndex < 0 || newIndex >= pcapPackets.length) return;
                 
                 const packet = pcapPackets[newIndex];
+                console.log(`📦 Switching to packet ${newIndex}, size: ${packet.data.length} bytes`);
+                console.log(`📦 First 16 bytes: ${Array.from(packet.data.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+                
                 setCurrentPacketIndex(newIndex);
                 setFileData(packet.data);
                 setOriginalFileData(new Uint8Array(packet.data));
                 setHasUnsavedChanges(false);
                 setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
                 
-                // Auto-reparse with new packet data
-                setTimeout(() => handleParse(), 100);
+                // Parse will be triggered automatically by useEffect when fileData changes
             };
 
             const flattenFields = (fields, list = []) => {
