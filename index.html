@@ -184,6 +184,7 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            position: relative;
         }
         
         .tree-node:hover {
@@ -227,6 +228,45 @@
         .edit-btn:hover {
             background: #30363d;
             border-color: #58a6ff;
+        }
+        
+        .export-menu {
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 4px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            min-width: 180px;
+        }
+        
+        .export-menu button {
+            display: block;
+            width: 100%;
+            padding: 8px 12px;
+            text-align: left;
+            background: transparent;
+            border: none;
+            color: #c9d1d9;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .export-menu button:hover {
+            background: #21262d;
+            color: #58a6ff;
+        }
+        
+        .export-menu button:first-child {
+            border-radius: 4px 4px 0 0;
+        }
+        
+        .export-menu button:last-child {
+            border-radius: 0 0 4px 4px;
         }
         
         .modal-overlay {
@@ -1281,16 +1321,56 @@ json.dumps(result)
                         </div>
                         
                         {canEdit && (
-                            <button
-                                className="edit-btn ml-2"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onEdit(node);
-                                }}
-                                title="Edit field value"
-                            >
-                                ✏️ Edit
-                            </button>
+                            <div style={{ display: 'flex', gap: '4px', position: 'relative' }}>
+                                <button
+                                    className="edit-btn"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onEdit(node);
+                                    }}
+                                    title="Edit field value"
+                                >
+                                    ✏️ Edit
+                                </button>
+                                <button
+                                    className="edit-btn"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        // Toggle export menu
+                                        const menu = e.currentTarget.nextElementSibling;
+                                        if (menu) {
+                                            // Close all other menus first
+                                            document.querySelectorAll('.export-menu').forEach(m => {
+                                                if (m !== menu) m.style.display = 'none';
+                                            });
+                                            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+                                        }
+                                    }}
+                                    title="Export field data"
+                                >
+                                    💾
+                                </button>
+                                <div 
+                                    className="export-menu"
+                                    style={{ display: 'none' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <button onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.currentTarget.parentElement.style.display = 'none';
+                                        if (window.onExportField) {
+                                            window.onExportField(node, 'python');
+                                        }
+                                    }}>📋 Copy Python bytes</button>
+                                    <button onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.currentTarget.parentElement.style.display = 'none';
+                                        if (window.onExportField) {
+                                            window.onExportField(node, 'file');
+                                        }
+                                    }}>💾 Save as file</button>
+                                </div>
+                            </div>
                         )}
                     </div>
                     {hasChildren && expanded && (
@@ -1695,6 +1775,67 @@ format_struct = Struct(
             const handleFieldEdit = (field) => {
                 setEditingField(field);
             };
+            
+            const handleExportField = (field, format) => {
+                if (!fileData || !field || field.length === 0) return;
+                
+                // Extract the field's bytes from fileData
+                const fieldBytes = fileData.slice(field.offset, field.offset + field.length);
+                
+                if (format === 'python') {
+                    // Generate Python bytes literal
+                    const hexBytes = Array.from(fieldBytes)
+                        .map(b => '\\x' + b.toString(16).padStart(2, '0'))
+                        .join('');
+                    const pythonCode = `b"${hexBytes}"`;
+                    
+                    // Copy to clipboard
+                    navigator.clipboard.writeText(pythonCode).then(() => {
+                        setParseStatus(`>>> Copied ${field.name} as Python bytes (${field.length} bytes)`);
+                    }).catch(err => {
+                        console.error('Failed to copy:', err);
+                        // Fallback: show in alert
+                        alert(`Python bytes:\n${pythonCode}`);
+                    });
+                } else if (format === 'file') {
+                    // Save as binary file
+                    const blob = new Blob([fieldBytes], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    
+                    // Generate safe filename
+                    const safeFieldName = field.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    const baseFileName = fileName.replace(/\.[^.]+$/, '');
+                    a.download = `${baseFileName}_${safeFieldName}.bin`;
+                    
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    
+                    setParseStatus(`>>> Exported ${field.name} to file (${field.length} bytes)`);
+                }
+            };
+            
+            // Expose to window for menu callbacks
+            useEffect(() => {
+                window.onExportField = handleExportField;
+                
+                // Close all export menus when clicking outside
+                const handleClickOutside = (e) => {
+                    if (!e.target.closest('.export-menu') && !e.target.closest('.edit-btn')) {
+                        document.querySelectorAll('.export-menu').forEach(menu => {
+                            menu.style.display = 'none';
+                        });
+                    }
+                };
+                
+                document.addEventListener('click', handleClickOutside);
+                
+                return () => {
+                    delete window.onExportField;
+                    document.removeEventListener('click', handleClickOutside);
+                };
+            }, [fileData, fileName]);
             
             const handleSaveEdit = (offset, newBytes) => {
                 // Create a new array with the edited bytes
