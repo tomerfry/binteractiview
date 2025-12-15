@@ -1281,10 +1281,15 @@ def build_and_parse_live(values_json):
                 const dataBytes = pyodide.toPy(dataArray);
                 pyodide.globals.set('data_list', dataBytes);
 
+                // FIXED: We explicitly assign the output to 'output_json' and return it at the end
                 const runnerCode = `
 ${structCode}
 
-# Logic to run the global instrumenter
+import json
+import traceback
+
+output_json = ""
+
 try:
     s = get_struct_obj()
     if not s: raise Exception("No struct found")
@@ -1307,14 +1312,19 @@ try:
     if len(final_fields) == 1 and final_fields[0]['name'] == 'root':
             final_fields = final_fields[0]['children']
             
-    import json
-    json.dumps({"fields": final_fields})
+    output_json = json.dumps({"fields": final_fields})
 except Exception as e:
-    import json
-    json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+    output_json = json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+# The last line is the return value for runPythonAsync
+output_json
 `;
                 
                 const result = await pyodide.runPythonAsync(runnerCode);
+                
+                // Guard against empty result
+                if (!result) return [];
+                
                 const parsed = JSON.parse(result);
                 
                 if (parsed.error) throw new Error(parsed.error);
@@ -1325,7 +1335,7 @@ except Exception as e:
                 throw error;
             }
         };
-
+        
 const SmartInput = ({ field, value, onChange, onFocus }) => {
             // Initial mode: integers use 'int', bytes default to 'hex'
             const initialMode = field.info.type === 'integer' ? 'int' : 'hex';
@@ -1779,401 +1789,217 @@ const SmartInput = ({ field, value, onChange, onFocus }) => {
 
         // Edit Modal Component
         const EditModal = ({ field, onClose, onSave }) => {
-            const [value, setValue] = useState('');
-            const [error, setError] = useState('');
-            const [inputMode, setInputMode] = useState('auto'); // 'hex' or 'int' or 'string' or 'auto'
-            
-            useEffect(() => {
-                // Determine if this is a Bytes field (not an integer field)
-                // Check if the value display format indicates bytes (shows hex string without decimal)
-                const isBytesField = field.value && field.value.match(/^[0-9A-F]+$/) && field.length >= 4;
-                const isIntField = field.rawValue !== null && field.rawValue !== undefined && typeof field.rawValue === 'number';
+            // --- 1. Initialization Logic ---
+            // Determine initial mode and value based on the field data
+            const getInitialState = () => {
+                const isInt = typeof field.rawValue === 'number';
+                // Default to 'int' for numbers, 'hex' for everything else (safest for binary editing)
+                const initialMode = isInt ? 'int' : 'hex';
                 
-                // Set initial value and mode based on field type
-                if (isIntField && field.length <= 4) {
-                    // Integer field (Int8, Int16, Int32)
-                    setValue(field.rawValue.toString());
-                    setInputMode('int');
+                let val = '';
+                if (isInt) {
+                    val = field.rawValue.toString();
                 } else if (field.value) {
-                    // Extract value from display string
-                    const match = field.value.match(/^([0-9A-F]+)/);
-                    if (match) {
-                        // Format with spaces for bytes
-                        const hexStr = match[1];
-                        let formatted = '';
-                        for (let i = 0; i < hexStr.length; i += 2) {
-                            if (i > 0) formatted += ' ';
-                            formatted += hexStr.substring(i, i + 2);
-                        }
-                        setValue(formatted);
-                        setInputMode('hex');
-                    } else {
-                        setValue(field.value.replace(/['"]/g, ''));
-                        setInputMode('string');
-                    }
-                } else {
-                    setInputMode('hex');
+                    // Extract raw hex from the display string (which might be "AA BB..." or "0x...")
+                    const raw = field.value.replace(/^0x/, '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                    // Initial formatting
+                    const chunks = raw.match(/.{1,2}/g) || [];
+                    val = chunks.join(' ');
                 }
                 
-                // For Bytes fields (4+ bytes that aren't integers), force hex mode
-                if (isBytesField || (field.length >= 4 && !isIntField)) {
-                    setInputMode('hex');
-                }
-            }, [field]);
+                return { mode: initialMode, val };
+            };
+
+            const initialState = getInitialState();
+            const [mode, setMode] = useState(initialState.mode);
+            const [localValue, setLocalValue] = useState(initialState.val);
+            const [error, setError] = useState('');
             
+            // Refs for cursor management
             const inputRef = useRef(null);
-            
-            const formatHexWithSpaces = (hexStr) => {
-                // Add spaces every 2 characters (after each byte)
-                let formatted = '';
-                for (let i = 0; i < hexStr.length; i += 2) {
-                    if (i > 0) formatted += ' ';
-                    formatted += hexStr.substring(i, i + 2);
+            const cursorTarget = useRef(null);
+
+            const size = field.length; // We always know the size in Edit Mode
+
+            // --- 2. Cursor Restoration ---
+            // Puts the cursor back in the right place after React re-renders the formatted value
+            useEffect(() => {
+                if (cursorTarget.current !== null && inputRef.current) {
+                    inputRef.current.setSelectionRange(cursorTarget.current, cursorTarget.current);
+                    cursorTarget.current = null;
                 }
-                return formatted;
-            };
-            
-            const handleInputChange = (e) => {
-                const input = e.target.value;
-                
-                // For hex mode (byte arrays), handle in-place nibble editing
-                if (inputMode === 'hex') {
-                    // Remove spaces to get raw hex
-                    const newHex = input.replace(/\s/g, '').toUpperCase();
-                    
-                    // Ensure we don't exceed field length
-                    const maxChars = field.length * 2;
-                    if (newHex.length > maxChars) {
-                        return; // Don't allow more than field size
-                    }
-                    
-                    // Pad with original bytes if user deleted some
-                    let finalHex = newHex;
-                    if (finalHex.length < maxChars) {
-                        // Pad with zeros to maintain field length
-                        finalHex = finalHex.padEnd(maxChars, '0');
-                    }
-                    
-                    setValue(formatHexWithSpaces(finalHex));
-                } else if (inputMode === 'int') {
-                    // Allow only digits, 'x', and 'X' for hex prefix
-                    if (/^(0x)?[0-9A-Fa-fXx]*$/.test(input)) {
-                        setValue(input);
-                    }
-                } else {
-                    setValue(input);
+            }, [localValue]);
+
+            // --- 3. Reactive Change Handler ---
+            const handleChange = (e) => {
+                const newValue = e.target.value;
+                const selectionStart = e.target.selectionStart;
+
+                setError(''); // Clear errors on type
+
+                if (mode === 'int') {
+                    setLocalValue(newValue);
                 }
-            };
-            
-            const handleKeyDown = (e) => {
-                if (e.key === 'Enter') {
-                    handleSave();
-                    return;
-                } else if (e.key === 'Escape') {
-                    onClose();
-                    return;
+                else if (mode === 'hex') {
+                    // --- Reactive Hex Logic (Same as SmartInput) ---
+                    
+                    // 1. Count real hex digits before cursor
+                    const rawBeforeCursor = newValue.substring(0, selectionStart).replace(/[^0-9A-Fa-f]/g, '').length;
+                    
+                    // 2. Get raw hex
+                    let raw = newValue.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                    
+                    // 3. Strict Size Limit
+                    if (size && raw.length > size * 2) {
+                        raw = raw.substring(0, size * 2);
+                    }
+                    
+                    // 4. Format with spaces
+                    const chunks = raw.match(/.{1,2}/g) || [];
+                    const formatted = chunks.join(' ');
+                    
+                    setLocalValue(formatted);
+
+                    // 5. Calculate new cursor position
+                    let newPos = 0;
+                    let hexCount = 0;
+                    for (let i = 0; i < formatted.length; i++) {
+                        if (/[0-9A-Fa-f]/.test(formatted[i])) hexCount++;
+                        if (hexCount === rawBeforeCursor) {
+                            newPos = i + 1;
+                            break;
+                        }
+                    }
+                    // Jump over space
+                    if (formatted[newPos] === ' ') newPos++;
+                    
+                    cursorTarget.current = newPos;
                 }
-                
-                // For hex input mode, handle nibble-by-nibble editing
-                if (inputMode === 'hex' && !e.ctrlKey && !e.metaKey) {
-                    const input = e.target;
-                    const cursorPos = input.selectionStart;
-                    const currentValue = value.replace(/\s/g, ''); // Remove spaces
-                    
-                    // Check if it's a hex character
-                    const isHexChar = /^[0-9A-Fa-f]$/.test(e.key);
-                    
-                    if (isHexChar) {
-                        e.preventDefault();
-                        
-                        // Calculate position in hex string (without spaces)
-                        let hexPos = 0;
-                        let visualPos = 0;
-                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
-                            if (value[i] !== ' ') {
-                                hexPos++;
-                            }
-                            visualPos++;
-                        }
-                        
-                        // Replace character at cursor position (overwrite mode)
-                        const newHex = currentValue.substring(0, hexPos) + 
-                                      e.key.toUpperCase() + 
-                                      currentValue.substring(hexPos + 1);
-                        
-                        const formatted = formatHexWithSpaces(newHex);
-                        setValue(formatted);
-                        
-                        // Move cursor forward
-                        setTimeout(() => {
-                            // Calculate new cursor position (accounting for spaces)
-                            let newVisualPos = 0;
-                            let hexCount = 0;
-                            for (let i = 0; i < formatted.length; i++) {
-                                if (formatted[i] !== ' ') {
-                                    hexCount++;
-                                }
-                                newVisualPos = i + 1;
-                                if (hexCount > hexPos) {
-                                    break;
-                                }
-                            }
-                            input.setSelectionRange(newVisualPos, newVisualPos);
-                        }, 0);
-                        
-                        return;
+                else if (mode === 'text') {
+                    // --- Text Logic ---
+                    let text = newValue;
+                    if (size && text.length > size) {
+                        text = text.substring(0, size);
                     }
-                    
-                    // Handle backspace
-                    if (e.key === 'Backspace') {
-                        e.preventDefault();
-                        
-                        if (cursorPos === 0) return;
-                        
-                        // Calculate position in hex string
-                        let hexPos = 0;
-                        let visualPos = 0;
-                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
-                            if (value[i] !== ' ') {
-                                hexPos++;
-                            }
-                            visualPos++;
-                        }
-                        
-                        if (hexPos > 0) {
-                            // Replace with 0 instead of deleting
-                            const newHex = currentValue.substring(0, hexPos - 1) + 
-                                          '0' + 
-                                          currentValue.substring(hexPos);
-                            
-                            const formatted = formatHexWithSpaces(newHex);
-                            setValue(formatted);
-                            
-                            // Move cursor back
-                            setTimeout(() => {
-                                let newVisualPos = 0;
-                                let hexCount = 0;
-                                for (let i = 0; i < formatted.length; i++) {
-                                    if (formatted[i] !== ' ') {
-                                        hexCount++;
-                                    }
-                                    if (hexCount >= hexPos - 1) {
-                                        newVisualPos = i;
-                                        break;
-                                    }
-                                }
-                                input.setSelectionRange(newVisualPos, newVisualPos);
-                            }, 0);
-                        }
-                        
-                        return;
-                    }
-                    
-                    // Handle delete
-                    if (e.key === 'Delete') {
-                        e.preventDefault();
-                        
-                        // Calculate position in hex string
-                        let hexPos = 0;
-                        let visualPos = 0;
-                        for (let i = 0; i < value.length && visualPos < cursorPos; i++) {
-                            if (value[i] !== ' ') {
-                                hexPos++;
-                            }
-                            visualPos++;
-                        }
-                        
-                        if (hexPos < currentValue.length) {
-                            // Replace with 0 instead of deleting
-                            const newHex = currentValue.substring(0, hexPos) + 
-                                          '0' + 
-                                          currentValue.substring(hexPos + 1);
-                            
-                            setValue(formatHexWithSpaces(newHex));
-                        }
-                        
-                        return;
-                    }
-                    
-                    // Allow navigation keys
-                    const allowedKeys = ['ArrowLeft', 'ArrowRight', 'Tab', 'Home', 'End'];
-                    if (!allowedKeys.includes(e.key)) {
-                        e.preventDefault();
-                    }
+                    setLocalValue(text);
                 }
             };
-            
-            const handleSave = () => {
-                setError('');
-                
+
+            const handleSaveClick = () => {
                 try {
                     let newBytes;
-                    
-                    // Check if we're in hex mode (for byte arrays)
-                    if (inputMode === 'hex') {
-                        // Hex byte array
-                        const hexStr = value.replace(/\s/g, '');
-                        if (hexStr.length % 2 !== 0) {
-                            throw new Error('Hex string must have even number of characters');
+
+                    if (mode === 'int') {
+                        // Integer Validation
+                        if (!/^(0x)?[0-9A-Fa-f]+$/.test(localValue) && !/^\d+$/.test(localValue)) {
+                            throw new Error("Invalid integer format");
                         }
-                        const numBytes = hexStr.length / 2;
-                        if (numBytes > field.length) {
-                            throw new Error(`Too many bytes. Max ${field.length} bytes allowed.`);
+                        let val = localValue.startsWith('0x') ? parseInt(localValue, 16) : parseInt(localValue, 10);
+                        
+                        // Check Bounds
+                        const max = size === 1 ? 0xFF : size === 2 ? 0xFFFF : size === 4 ? 0xFFFFFFFF : Number.MAX_SAFE_INTEGER;
+                        if (val < 0 || val > max) throw new Error(`Value exceeds ${size} byte(s)`);
+                        
+                        // Convert to Bytes (Little Endian default for integers)
+                        newBytes = new Uint8Array(size);
+                        for (let i = 0; i < size; i++) {
+                             newBytes[i] = (val >> (i * 8)) & 0xFF;
                         }
-                        // Create array with exact bytes needed
-                        newBytes = new Uint8Array(field.length);
-                        for (let i = 0; i < numBytes; i++) {
-                            const byteVal = parseInt(hexStr.substr(i * 2, 2), 16);
-                            if (isNaN(byteVal)) {
-                                throw new Error('Invalid hex value');
-                            }
-                            newBytes[i] = byteVal;
-                        }
-                        // Note: Remaining bytes stay as 0 if not specified
-                    } else if (inputMode === 'int') {
-                        // Integer field
-                        if (field.length === 1) {
-                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                            if (isNaN(val) || val < 0 || val > 255) {
-                                throw new Error('Value must be between 0 and 255');
-                            }
-                            newBytes = new Uint8Array([val]);
-                        } else if (field.length === 2) {
-                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                            if (isNaN(val) || val < 0 || val > 65535) {
-                                throw new Error('Value must be between 0 and 65535');
-                            }
-                            newBytes = new Uint8Array([val & 0xFF, (val >> 8) & 0xFF]);
-                        } else if (field.length === 4) {
-                            let val = value.startsWith('0x') ? parseInt(value, 16) : parseInt(value, 10);
-                            if (isNaN(val) || val < 0 || val > 4294967295) {
-                                throw new Error('Value must be between 0 and 4294967295');
-                            }
-                            newBytes = new Uint8Array([
-                                val & 0xFF,
-                                (val >> 8) & 0xFF,
-                                (val >> 16) & 0xFF,
-                                (val >> 24) & 0xFF
-                            ]);
+
+                    } else if (mode === 'hex') {
+                        // Hex Validation
+                        const raw = localValue.replace(/[^0-9A-Fa-f]/g, '');
+                        // Auto-pad with zeros if user leaves it short (e.g. "F" -> "0F")
+                        const padded = raw.padEnd(size * 2, '0');
+                        
+                        newBytes = new Uint8Array(size);
+                        for (let i = 0; i < size; i++) {
+                            newBytes[i] = parseInt(padded.substr(i*2, 2), 16);
                         }
                     } else {
-                        // String mode
-                        const encoder = new TextEncoder();
-                        const encoded = encoder.encode(value);
-                        if (encoded.length > field.length) {
-                            throw new Error(`String too long. Max ${field.length} bytes.`);
+                        // Text Validation
+                        newBytes = new Uint8Array(size); // Zero-filled by default
+                        for (let i = 0; i < Math.min(localValue.length, size); i++) {
+                            newBytes[i] = localValue.charCodeAt(i);
                         }
-                        // Pad with zeros if string is shorter
-                        newBytes = new Uint8Array(field.length);
-                        newBytes.set(encoded);
                     }
                     
                     onSave(field.offset, newBytes);
                     onClose();
-                } catch (err) {
-                    setError(err.message);
+                } catch (e) {
+                    setError(e.message);
                 }
             };
-            
-            const getInputHelp = () => {
-                if (inputMode === 'hex') {
-                    return `Enter ${field.length} hex bytes (auto-spaced)`;
-                } else if (inputMode === 'int') {
-                    if (field.length === 1) {
-                        return 'Enter decimal (0-255) or hex (0xFF)';
-                    } else if (field.length === 2) {
-                        return 'Enter decimal (0-65535) or hex (0xFFFF)';
-                    } else if (field.length === 4) {
-                        return 'Enter decimal or hex (0xFFFFFFFF)';
-                    }
-                } else {
-                    return 'Enter ASCII string';
-                }
+
+            const toggleMode = () => {
+                // Cycle: Hex -> Text -> Hex (Int is usually sticky unless manually switched, or we can cycle all 3)
+                // Let's stick to Hex/Text toggle for Bytes fields, and keep Int for Int fields.
+                if (mode === 'int') return; // Don't toggle out of Int mode easily to avoid confusion
+                
+                const newMode = mode === 'hex' ? 'text' : 'hex';
+                setMode(newMode);
+                setLocalValue(''); // Clear value on toggle to avoid conversion confusion
+                setError('');
             };
-            
-            const getPlaceholder = () => {
-                if (inputMode === 'hex') {
-                    // Show hex byte pattern
-                    return Array(Math.min(field.length, 4)).fill('00').join(' ') + 
-                           (field.length > 4 ? ' ...' : '');
-                } else if (inputMode === 'int') {
-                    if (field.length === 1) {
-                        return '0xFF or 255';
-                    } else if (field.length === 2) {
-                        return '0x1234 or 4660';
-                    } else if (field.length === 4) {
-                        return '0xDEADBEEF or 3735928559';
-                    }
-                } else {
-                    return 'Enter text...';
-                }
+
+            const getIcon = () => {
+                if (mode === 'int') return '🔢';
+                if (mode === 'hex') return '0x';
+                if (mode === 'text') return 'Aa';
+                return '📝';
             };
-            
-            const toggleInputMode = () => {
-                if (inputMode === 'hex') {
-                    setInputMode('string');
-                    setValue('');
-                } else {
-                    setInputMode('hex');
-                    setValue('');
-                }
-            };
-            
+
             return (
                 <div className="modal-overlay" onClick={onClose}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-                        <h2 className="text-lg font-semibold mb-4" style={{ color: '#58a6ff' }}>
-                            Edit Field: {field.name}
-                        </h2>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-lg font-semibold" style={{ color: '#58a6ff' }}>
+                                Edit Field: {field.name}
+                            </h2>
+                            {mode !== 'int' && (
+                                <button 
+                                    onClick={toggleMode}
+                                    className="text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700 hover:border-blue-500 text-blue-400 transition-colors"
+                                >
+                                    Mode: {mode.toUpperCase()}
+                                </button>
+                            )}
+                        </div>
                         
-                        <div className="mb-4">
-                            <div className="text-sm mb-2" style={{ color: '#8b949e' }}>
-                                <div>Offset: 0x{field.offset.toString(16).padStart(4, '0')}</div>
-                                <div>Size: {field.length} bytes</div>
-                                <div className="mt-1 flex items-center justify-between">
-                                    <span style={{ color: '#6e7681', fontSize: '12px' }}>
-                                        {getInputHelp()}
-                                    </span>
-                                    {inputMode !== 'int' && (
-                                        <button
-                                            onClick={toggleInputMode}
-                                            className="px-2 py-1 text-xs rounded"
-                                            style={{
-                                                background: '#21262d',
-                                                border: '1px solid #30363d',
-                                                color: '#58a6ff'
-                                            }}
-                                        >
-                                            {inputMode === 'hex' ? 'Switch to ASCII' : 'Switch to Hex'}
-                                        </button>
-                                    )}
-                                </div>
+                        <div className="mb-6">
+                            <div className="text-sm mb-2 flex justify-between" style={{ color: '#8b949e' }}>
+                                <span>Offset: 0x{field.offset.toString(16).padStart(4, '0')}</span>
+                                <span>Size: {size} bytes</span>
                             </div>
                             
-                            <input
-                                ref={inputRef}
-                                type="text"
-                                className="modal-input"
-                                value={value}
-                                onChange={handleInputChange}
-                                onKeyDown={handleKeyDown}
-                                placeholder={getPlaceholder()}
-                                autoFocus
-                                style={{
-                                    fontFamily: inputMode === 'hex' ? 'JetBrains Mono, monospace' : 'inherit',
-                                    letterSpacing: inputMode === 'hex' ? '0.05em' : 'normal'
-                                }}
-                            />
-                            
-                            {inputMode === 'hex' && (
-                                <div className="mt-2 text-xs" style={{ color: '#6e7681' }}>
-                                    💡 Tip: Type hex digits to overwrite nibbles in-place. Use arrow keys to navigate.
+                            <div className="relative group">
+                                <div className="absolute left-3 top-1/2 transform -translate-y-1/2 opacity-50 text-sm grayscale font-mono font-bold select-none pointer-events-none">
+                                    {getIcon()}
                                 </div>
-                            )}
+                                <input
+                                    ref={inputRef}
+                                    type="text"
+                                    className="w-full bg-[#0d1117] border border-gray-600 rounded px-3 py-2 pl-10 text-base font-mono focus:outline-none focus:border-blue-500 transition-colors text-blue-100"
+                                    value={localValue}
+                                    onChange={handleChange}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSaveClick()}
+                                    placeholder={mode === 'hex' ? 'FF 00 AA...' : 'Enter value...'}
+                                    autoFocus
+                                />
+                            </div>
+                            
+                            <div className="mt-2 text-xs text-gray-500 flex justify-between">
+                                <span>
+                                    {mode === 'hex' && `Hex: ${localValue.replace(/\s/g, '').length / 2} / ${size} bytes`}
+                                    {mode === 'text' && `Text: ${localValue.length} / ${size} chars`}
+                                    {mode === 'int' && `Integer (${size * 8}-bit)`}
+                                </span>
+                                {mode === 'hex' && <span>Reactive Insert Mode</span>}
+                            </div>
                             
                             {error && (
-                                <div className="mt-2 text-sm" style={{ color: '#ff7b72' }}>
-                                    {error}
+                                <div className="mt-3 text-sm p-2 rounded bg-red-900/20 border border-red-500/50 text-red-400">
+                                    ⚠️ {error}
                                 </div>
                             )}
                         </div>
@@ -2181,20 +2007,19 @@ const SmartInput = ({ field, value, onChange, onFocus }) => {
                         <div className="flex justify-end space-x-2">
                             <button
                                 onClick={onClose}
-                                className="px-4 py-2 btn-terminal rounded"
+                                className="px-4 py-2 btn-terminal rounded hover:bg-gray-800"
                             >
                                 Cancel
                             </button>
                             <button
-                                onClick={handleSave}
-                                className="px-4 py-2 rounded"
+                                onClick={handleSaveClick}
+                                className="px-6 py-2 rounded font-medium text-white shadow-lg transition-transform active:scale-95"
                                 style={{
                                     background: '#238636',
                                     border: '1px solid #2ea043',
-                                    color: '#fff'
                                 }}
                             >
-                                Save
+                                Save Changes
                             </button>
                         </div>
                     </div>
