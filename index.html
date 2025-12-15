@@ -1154,18 +1154,21 @@ def instrument_structure(sc, name=""):
         return InstrumentedWrapper(sc, field_name)
 
 # --- 2. Schema Introspection Helpers ---
+# Find def get_type_info(sc): and replace it with this:
 def get_type_info(sc):
     if isinstance(sc, Renamed): sc = sc.subcon
     if isinstance(sc, FormatField):
         return {"type": "integer", "size": sc.length, "signed": getattr(sc, "signed", False)}
     if isinstance(sc, Bytes):
-        return {"type": "bytes", "size": sc.length}
+        # FIX: Check if size is actually an integer. If it's a Path (this.a), return None.
+        size = sc.length if isinstance(sc.length, int) else None
+        return {"type": "bytes", "size": size}
     if isinstance(sc, Const):
         val = sc.value
         if isinstance(val, bytes): val = val.hex().upper()
         return {"type": "const", "value": val}
     return {"type": "unknown", "repr": str(type(sc))}
-
+    
 def extract_schema(sc, path=""):
     fields = []
     def walk(subcon, current_path):
