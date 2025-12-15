@@ -1136,240 +1136,155 @@ format_struct = Struct(
                 // Create Python code to parse the structure
                 const pythonCode = `
 import json
+import traceback
 from construct import *
 
-# Store the built-in construct names before user code
-_builtin_constructs = set(dir())
+# --- 1. Instrumentation Core ---
 
-# User's structure definition
+# Global side-channel to store the UI tree
+_ui_roots = []
+_ui_stack = []
+
+class InstrumentedWrapper(Subconstruct):
+    """
+    A transparent wrapper that records parsing metadata (offsets, lengths)
+    into a global tree structure without modifying the data passing through.
+    """
+    def __init__(self, subcon, name):
+        super().__init__(subcon)
+        self.name = name
+
+    def _parse(self, stream, context, path):
+        # 1. Create a node for this field
+        node = {
+            "name": self.name,
+            "children": [],
+            "value": None,
+            "offset": 0,
+            "length": 0,
+            "rawValue": None
+        }
+
+        # 2. Attach to parent (if exists) or root
+        if _ui_stack:
+            _ui_stack[-1]['children'].append(node)
+        else:
+            _ui_roots.append(node)
+
+        # 3. Push self to stack (so children attach to me)
+        _ui_stack.append(node)
+
+        # 4. Record Start Offset
+        start_offset = stream.tell()
+
+        try:
+            # 5. Run the actual parse (Transparent!)
+            obj = self.subcon._parse(stream, context, path)
+            
+            # 6. Record End & Value
+            end_offset = stream.tell()
+            node['offset'] = start_offset
+            node['length'] = end_offset - start_offset
+            node['rawValue'] = obj
+            
+            # Format value for UI display
+            node['value'] = self._format_value(obj, node['length'])
+            
+            return obj
+            
+        except Exception as e:
+            node['error'] = str(e)
+            raise e
+        finally:
+            # 7. Pop self from stack
+            _ui_stack.pop()
+            
+    def _build(self, obj, stream, context, path):
+        return self.subcon._build(obj, stream, context, path)
+
+    def _format_value(self, val, length):
+        if isinstance(val, bytes):
+            if len(val) > 16:
+                return f"{val[:8].hex().upper()}... ({len(val)} bytes)"
+            return val.hex().upper()
+        if isinstance(val, int):
+            if length == 1: return f"0x{val:02X} ({val})"
+            if length == 2: return f"0x{val:04X} ({val})"
+            if length == 4: return f"0x{val:08X} ({val})"
+            return f"0x{val:X} ({val})"
+        if isinstance(val, str):
+            return f'"{val}"'
+        return str(val)
+
+def instrument_structure(sc, name=""):
+    if isinstance(sc, Renamed):
+        return instrument_structure(sc.subcon, sc.name)
+    if isinstance(sc, Struct):
+        new_subcons = [instrument_structure(sub, sub.name) for sub in sc.subcons]
+        return InstrumentedWrapper(Struct(*new_subcons), name or "Struct")
+    elif isinstance(sc, Array):
+        inner = instrument_structure(sc.subcon, "")
+        return InstrumentedWrapper(Array(sc.count, inner), name or "Array")
+    else:
+        field_name = name or getattr(sc, "name", None) or type(sc).__name__
+        return InstrumentedWrapper(sc, field_name)
+
+# --- 2. User Code Injection ---
+# We execute this in the Global Scope so indentation doesn't matter!
 ${structCode}
 
-# Get new names added by user code
-_user_constructs = set(dir()) - _builtin_constructs
+# --- 3. Parse Logic ---
 
-# Helper function to wrap all fields in RawCopy
-def wrap_with_rawcopy(construct_obj):
-    """Recursively wrap all fields with RawCopy to capture offset information."""
-    if isinstance(construct_obj, Struct):
-        new_subcons = {}
-        for subcon in construct_obj.subcons:
-            # Each subcon has a 'name' attribute
-            field_name = subcon.name
-            # Wrap each field with RawCopy
-            if isinstance(subcon.subcon, (Struct, Array)):
-                # Recursively wrap nested structures
-                wrapped = RawCopy(wrap_with_rawcopy(subcon.subcon))
-            else:
-                wrapped = RawCopy(subcon.subcon)
-            # Store with the original name
-            new_subcons[field_name] = wrapped
-        # Return new Struct with wrapped fields
-        return Struct(**new_subcons)
-    elif isinstance(construct_obj, Array):
-        # Wrap the subcon of the array
-        if isinstance(construct_obj.subcon, Struct):
-            wrapped_subcon = wrap_with_rawcopy(construct_obj.subcon)
-        else:
-            wrapped_subcon = RawCopy(construct_obj.subcon)
-        return Array(construct_obj.count, wrapped_subcon)
-    else:
-        return RawCopy(construct_obj)
-
-# Parse the data
 def parse_structure(data_list):
+    global _ui_roots, _ui_stack
+    
     try:
-        # Convert list to bytes
-        data_bytes = bytes(data_list)
-        print(f"Data bytes length: {len(data_bytes)}")
-        
-        # Try to find a Struct/Construct object defined by the user
+        # 1. Find the user's structure (it's now in globals)
         struct_obj = None
-        
-        # First, try common naming conventions
-        for name in ['format_struct', 'struct', 'format', 'packet', 'header']:
+        for name in ['format_struct', 'struct', 'packet', 'header']:
             if name in globals() and isinstance(globals()[name], Construct):
                 struct_obj = globals()[name]
-                print(f"Found structure by name: {name}")
                 break
+                
+        if not struct_obj:
+            return {"error": "No structure found. Define 'format_struct = Struct(...)'"}
+
+        # 2. Reset Side-Channel
+        _ui_roots = []
+        _ui_stack = []
         
-        # If not found, look in user-defined constructs
-        if struct_obj is None:
-            for name in _user_constructs:
-                obj = globals().get(name)
-                if isinstance(obj, Construct) and isinstance(obj, Struct):
-                    struct_obj = obj
-                    print(f"Found user structure: {name}")
-                    break
+        # 3. Instrument the structure (Wrap it!)
+        instrumented = instrument_structure(struct_obj, "root")
         
-        if struct_obj is None:
-            return {"error": "No Construct structure found. Define a structure (e.g., format_struct = Struct(...))"}
+        # 4. Parse
+        data_bytes = bytes(data_list)
+        instrumented.parse(data_bytes)
         
-        # Wrap the structure with RawCopy for offset tracking
-        wrapped_struct = wrap_with_rawcopy(struct_obj)
-        
-        # Parse the data
-        print("Parsing data with RawCopy wrapper...")
-        parsed = wrapped_struct.parse(data_bytes)
-        print(f"Parse complete, result type: {type(parsed)}")
-        print(f"Parsed container keys: {list(parsed.keys()) if hasattr(parsed, 'keys') else 'N/A'}")
-        print(f"Parsed container items: {[(k, type(v)) for k, v in parsed.items()] if hasattr(parsed, 'items') else 'N/A'}")
-        
-        # Convert to JSON-serializable format using RawCopy offset information
-        def to_dict(obj, parent_name="", depth=0):
-            result = []
+        # 5. Clean up the UI tree for JSON
+        def clean_node(n):
+            return {
+                "name": n['name'],
+                "value": n['value'],
+                "offset": n['offset'],
+                "length": n['length'],
+                "rawValue": n['rawValue'] if isinstance(n['rawValue'], (int, str, bool, type(None))) else None,
+                "children": [clean_node(c) for c in n['children']]
+            }
             
-            if isinstance(obj, Container):
-                for key, value in obj.items():
-                    if key.startswith('_'):
-                        continue
-                    
-                    print(f"{'  ' * depth}Processing field: {key} = {type(value)}")
-                    
-                    # Check if this is a RawCopy result (has 'data', 'value', 'offset1', 'offset2')
-                    if isinstance(value, Container) and hasattr(value, 'offset1') and hasattr(value, 'offset2'):
-                        offset = value.offset1
-                        length = value.offset2 - value.offset1
-                        actual_value = value.value
-                        
-                        print(f"{'  ' * depth}  RawCopy field: offset={offset}, length={length}, value_type={type(actual_value)}")
-                        
-                        # Handle different value types
-                        if isinstance(actual_value, ListContainer):
-                            # Array of items
-                            children = []
-                            for idx, item in enumerate(actual_value):
-                                # Check if item is a Container with nested RawCopy fields
-                                if isinstance(item, Container):
-                                    # This is a Struct in the array - need to process its fields
-                                    nested_fields = to_dict(item, f"[{idx}]", depth + 2)
-                                    
-                                    if nested_fields:
-                                        # Calculate total size from nested fields
-                                        if len(nested_fields) > 0:
-                                            first_offset = nested_fields[0]['offset']
-                                            last_field = nested_fields[-1]
-                                            last_offset = last_field['offset'] + last_field['length']
-                                            item_size = last_offset - first_offset
-                                            
-                                            children.append({
-                                                'name': f'[{idx}]',
-                                                'value': None,
-                                                'offset': first_offset,
-                                                'length': item_size,
-                                                'children': nested_fields
-                                            })
-                                    else:
-                                        print(f"{'  ' * depth}    WARNING: Array item [{idx}] produced no nested fields")
-                                elif hasattr(item, 'offset1') and hasattr(item, 'offset2'):
-                                    # Direct RawCopy wrapped value (shouldn't happen for Struct in Array)
-                                    child_offset = item.offset1
-                                    child_length = item.offset2 - item.offset1
-                                    child_value = item.value
-                                    
-                                    display_value = format_value(child_value, child_length)
-                                    children.append({
-                                        'name': f'[{idx}]',
-                                        'value': display_value,
-                                        'offset': child_offset,
-                                        'length': child_length,
-                                        'rawValue': child_value if isinstance(child_value, (int, str, bool, type(None))) else None
-                                    })
-                                else:
-                                    # Fallback - shouldn't reach here
-                                    print(f"{'  ' * depth}    WARNING: Array item [{idx}] is not properly wrapped: {type(item)}")
-                                    children.append({
-                                        'name': f'[{idx}]',
-                                        'value': str(item),
-                                        'offset': offset + idx,
-                                        'length': 1,
-                                        'rawValue': None
-                                    })
-                            
-                            result.append({
-                                'name': key,
-                                'value': f'Array[{len(actual_value)}]',
-                                'offset': offset,
-                                'length': length,
-                                'children': children
-                            })
-                        elif isinstance(actual_value, Container):
-                            # Nested structure
-                            nested_children = to_dict(actual_value, key, depth + 1)
-                            result.append({
-                                'name': key,
-                                'value': None,
-                                'offset': offset,
-                                'length': length,
-                                'children': nested_children
-                            })
-                        else:
-                            # Simple field
-                            display_value = format_value(actual_value, length)
-                            result.append({
-                                'name': key,
-                                'value': display_value,
-                                'offset': offset,
-                                'length': length,
-                                'rawValue': actual_value if isinstance(actual_value, (int, str, bool, type(None))) else None
-                            })
-                    else:
-                        # Not a RawCopy result - this shouldn't happen with our wrapper
-                        print(f"{'  ' * depth}  WARNING: Field {key} is not RawCopy wrapped")
-                        if isinstance(value, Container):
-                            nested = to_dict(value, key, depth + 1)
-                            if nested:
-                                result.append({
-                                    'name': key,
-                                    'value': None,
-                                    'offset': 0,
-                                    'length': 0,
-                                    'children': nested
-                                })
-                        else:
-                            result.append({
-                                'name': key,
-                                'value': str(value),
-                                'offset': 0,
-                                'length': 0,
-                                'rawValue': value if isinstance(value, (int, str, bool, type(None))) else None
-                            })
-            
-            print(f"{'  ' * depth}Returning {len(result)} fields")
-            return result
+        final_fields = [clean_node(n) for n in _ui_roots]
         
-        def format_value(value, length):
-            """Format a value for display."""
-            if isinstance(value, bytes):
-                return value.hex().upper() if len(value) <= 16 else f"{value[:8].hex().upper()}... ({len(value)} bytes)"
-            elif isinstance(value, int):
-                if length == 1:
-                    return f"0x{value:02X} ({value})"
-                elif length == 2:
-                    return f"0x{value:04X} ({value})"
-                elif length == 4:
-                    return f"0x{value:08X} ({value})"
-                else:
-                    return f"0x{value:X} ({value})"
-            elif isinstance(value, str):
-                return f'"{value}"'
-            else:
-                return str(value)
-        
-        result = to_dict(parsed)
-        print(f"Final result: {len(result)} top-level fields")
-        return {"fields": result}
-        
+        if len(final_fields) == 1 and final_fields[0]['name'] == 'root':
+             final_fields = final_fields[0]['children']
+
+        return {"fields": final_fields}
+
     except Exception as e:
-        import traceback
-        print(f"Error: {e}")
-        print(traceback.format_exc())
         return {"error": str(e), "traceback": traceback.format_exc()}
 
-# Execute parsing
+# Execute
 result = parse_structure(data_list)
 json.dumps(result)
 `;
-
                 // Set the data in Python environment
                 pyodide.globals.set('data_list', dataBytes);
                 console.log('Set data_list in Python globals');
