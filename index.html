@@ -1091,112 +1091,40 @@ format_struct = Struct(
         let pyodide = null;
         let pyodideReady = false;
 
-        const initPyodide = async () => {
-            if (pyodideReady) return pyodide;
-            
-            console.log('Loading Pyodide...');
-            pyodide = await loadPyodide({
-                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
-            });
-            
-            console.log('Installing construct and cryptography...');
-            await pyodide.loadPackage(['micropip']);
-            const micropip = pyodide.pyimport('micropip');
-            await micropip.install('construct');
-            
-            // Load cryptography for EncryptedSym support
-            try {
-                await pyodide.loadPackage('cryptography');
-                console.log('Cryptography loaded successfully');
-            } catch (err) {
-                console.warn('Cryptography not available:', err);
-            }
-            
-            console.log('Pyodide ready!');
-            pyodideReady = true;
-            return pyodide;
-        };
-
-        const parseWithConstruct = async (data, structCode) => {
-            if (!pyodideReady) {
-                throw new Error('Pyodide not ready');
-            }
-
-            console.log('parseWithConstruct called with data length:', data.length);
-            console.log('Struct code:', structCode);
-
-            try {
-                // Convert Uint8Array to Python bytes properly
-                const dataArray = Array.from(data);
-                console.log('Converted to array, length:', dataArray.length);
-                
-                const dataBytes = pyodide.toPy(dataArray);
-                console.log('Created Python object');
-                
-                // Create Python code to parse the structure
-                const pythonCode = `
+        // Static Python helpers
+        const PYTHON_BOOTSTRAP = `
 import json
 import traceback
+import struct
 from construct import *
 
-# --- 1. Instrumentation Core ---
-
-# Global side-channel to store the UI tree
+# --- 1. Instrumentation & UI Helpers ---
 _ui_roots = []
 _ui_stack = []
 
 class InstrumentedWrapper(Subconstruct):
-    """
-    A transparent wrapper that records parsing metadata (offsets, lengths)
-    into a global tree structure without modifying the data passing through.
-    """
     def __init__(self, subcon, name):
         super().__init__(subcon)
         self.name = name
 
     def _parse(self, stream, context, path):
-        # 1. Create a node for this field
-        node = {
-            "name": self.name,
-            "children": [],
-            "value": None,
-            "offset": 0,
-            "length": 0,
-            "rawValue": None
-        }
-
-        # 2. Attach to parent (if exists) or root
-        if _ui_stack:
-            _ui_stack[-1]['children'].append(node)
-        else:
-            _ui_roots.append(node)
-
-        # 3. Push self to stack (so children attach to me)
+        node = { "name": self.name, "children": [], "value": None, "offset": 0, "length": 0, "rawValue": None }
+        if _ui_stack: _ui_stack[-1]['children'].append(node)
+        else: _ui_roots.append(node)
         _ui_stack.append(node)
-
-        # 4. Record Start Offset
         start_offset = stream.tell()
-
         try:
-            # 5. Run the actual parse (Transparent!)
             obj = self.subcon._parse(stream, context, path)
-            
-            # 6. Record End & Value
             end_offset = stream.tell()
             node['offset'] = start_offset
             node['length'] = end_offset - start_offset
             node['rawValue'] = obj
-            
-            # Format value for UI display
             node['value'] = self._format_value(obj, node['length'])
-            
             return obj
-            
         except Exception as e:
             node['error'] = str(e)
             raise e
         finally:
-            # 7. Pop self from stack
             _ui_stack.pop()
             
     def _build(self, obj, stream, context, path):
@@ -1204,109 +1132,532 @@ class InstrumentedWrapper(Subconstruct):
 
     def _format_value(self, val, length):
         if isinstance(val, bytes):
-            if len(val) > 16:
-                return f"{val[:8].hex().upper()}... ({len(val)} bytes)"
+            if len(val) > 16: return f"{val[:8].hex().upper()}... ({len(val)} bytes)"
             return val.hex().upper()
         if isinstance(val, int):
             if length == 1: return f"0x{val:02X} ({val})"
             if length == 2: return f"0x{val:04X} ({val})"
             if length == 4: return f"0x{val:08X} ({val})"
             return f"0x{val:X} ({val})"
-        if isinstance(val, str):
-            return f'"{val}"'
         return str(val)
 
 def instrument_structure(sc, name=""):
-    if isinstance(sc, Renamed):
-        return instrument_structure(sc.subcon, sc.name)
+    if isinstance(sc, Renamed): return instrument_structure(sc.subcon, sc.name)
     if isinstance(sc, Struct):
         new_subcons = [instrument_structure(sub, sub.name) for sub in sc.subcons]
         return InstrumentedWrapper(Struct(*new_subcons), name or "Struct")
     elif isinstance(sc, Array):
-        inner = instrument_structure(sc.subcon, "")
-        return InstrumentedWrapper(Array(sc.count, inner), name or "Array")
+        return InstrumentedWrapper(Array(sc.count, instrument_structure(sc.subcon, "")), name or "Array")
     else:
         field_name = name or getattr(sc, "name", None) or type(sc).__name__
         return InstrumentedWrapper(sc, field_name)
 
-# --- 2. User Code Injection ---
-# We execute this in the Global Scope so indentation doesn't matter!
-${structCode}
+# --- 2. Schema Introspection Helpers ---
+def get_type_info(sc):
+    if isinstance(sc, Renamed): sc = sc.subcon
+    if isinstance(sc, FormatField):
+        return {"type": "integer", "size": sc.length, "signed": getattr(sc, "signed", False)}
+    if isinstance(sc, Bytes):
+        return {"type": "bytes", "size": sc.length}
+    if isinstance(sc, Const):
+        val = sc.value
+        if isinstance(val, bytes): val = val.hex().upper()
+        return {"type": "const", "value": val}
+    return {"type": "unknown", "repr": str(type(sc))}
 
-# --- 3. Parse Logic ---
+def extract_schema(sc, path=""):
+    fields = []
+    def walk(subcon, current_path):
+        if isinstance(subcon, Renamed):
+            name = subcon.name
+            info = get_type_info(subcon.subcon)
+            if isinstance(subcon.subcon, Struct):
+                for sub in subcon.subcon.subcons:
+                    walk(sub, current_path + [name])
+                return
+            fields.append({ "id": ".".join(current_path + [name]), "name": name, "path": current_path, "info": info })
+            return
+        if isinstance(subcon, Struct):
+            for sub in subcon.subcons:
+                walk(sub, current_path)
+            return
+    walk(sc, [])
+    return fields
 
-def parse_structure(data_list):
-    global _ui_roots, _ui_stack
-    
+def get_struct_obj():
+    for name in ['format_struct', 'struct', 'packet', 'header']:
+        if name in globals() and isinstance(globals()[name], Construct):
+            return globals()[name]
+    return None
+
+def get_schema_json():
+    s = get_struct_obj()
+    if not s: return {"error": "No struct found"}
     try:
-        # 1. Find the user's structure (it's now in globals)
-        struct_obj = None
-        for name in ['format_struct', 'struct', 'packet', 'header']:
-            if name in globals() and isinstance(globals()[name], Construct):
-                struct_obj = globals()[name]
-                break
-                
-        if not struct_obj:
-            return {"error": "No structure found. Define 'format_struct = Struct(...)'"}
+        return {"schema": extract_schema(s)}
+    except Exception as e:
+        return {"error": str(e)}
 
-        # 2. Reset Side-Channel
+def build_and_parse_live(values_json):
+    global _ui_roots, _ui_stack
+    s = get_struct_obj()
+    if not s: return {"error": "No struct found"}
+    try:
+        vals = json.loads(values_json)
+        container = Container()
+        
+        def set_nested(root, path, value):
+            curr = root
+            for p in path[:-1]:
+                if p not in curr: curr[p] = Container()
+                curr = curr[p]
+            
+            final_val = value
+            # Handle hex strings for bytes fields
+            if isinstance(value, str):
+                clean = value.replace(' ', '').replace('0x', '')
+                if all(c in '0123456789ABCDEFabcdef' for c in clean):
+                     if len(clean) % 2 == 0 and len(clean) > 0:
+                         try: 
+                            final_val = bytes.fromhex(clean)
+                         except: pass
+
+            curr[path[-1]] = final_val
+
+        for key, val in vals.items():
+            set_nested(container, key.split('.'), val)
+
+        # Build
+        data = s.build(container)
+        
+        # Parse Back for Highlighting
         _ui_roots = []
         _ui_stack = []
+        instrumented = instrument_structure(s, "root")
+        instrumented.parse(data)
         
-        # 3. Instrument the structure (Wrap it!)
-        instrumented = instrument_structure(struct_obj, "root")
-        
-        # 4. Parse
-        data_bytes = bytes(data_list)
-        instrumented.parse(data_bytes)
-        
-        # 5. Clean up the UI tree for JSON
         def clean_node(n):
             return {
-                "name": n['name'],
-                "value": n['value'],
-                "offset": n['offset'],
-                "length": n['length'],
-                "rawValue": n['rawValue'] if isinstance(n['rawValue'], (int, str, bool, type(None))) else None,
+                "name": n['name'], "value": n['value'], "offset": n['offset'], "length": n['length'],
                 "children": [clean_node(c) for c in n['children']]
             }
-            
-        final_fields = [clean_node(n) for n in _ui_roots]
         
-        if len(final_fields) == 1 and final_fields[0]['name'] == 'root':
-             final_fields = final_fields[0]['children']
+        fields = [clean_node(n) for n in _ui_roots]
+        if len(fields) == 1 and fields[0]['name'] == 'root': fields = fields[0]['children']
 
-        return {"fields": final_fields}
-
+        return { "hex": data.hex(), "fields": fields }
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
-
-# Execute
-result = parse_structure(data_list)
-json.dumps(result)
 `;
-                // Set the data in Python environment
+
+       const initPyodide = async () => {
+            if (pyodideReady) return pyodide;
+            
+            console.log('Loading Pyodide...');
+            pyodide = await loadPyodide({
+                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+            });
+            
+            await pyodide.loadPackage(['micropip']);
+            const micropip = pyodide.pyimport('micropip');
+            await micropip.install('construct');
+            
+            try { await pyodide.loadPackage('cryptography'); } catch (err) {}
+            
+            console.log('Bootstrapping Python environment...');
+            await pyodide.runPythonAsync(PYTHON_BOOTSTRAP);
+            
+            console.log('Pyodide ready!');
+            pyodideReady = true;
+            return pyodide;
+        };
+
+
+        const parseWithConstruct = async (data, structCode) => {
+            if (!pyodideReady) throw new Error('Pyodide not ready');
+
+            try {
+                const dataArray = Array.from(data);
+                const dataBytes = pyodide.toPy(dataArray);
                 pyodide.globals.set('data_list', dataBytes);
-                console.log('Set data_list in Python globals');
+
+                const runnerCode = `
+${structCode}
+
+# Logic to run the global instrumenter
+try:
+    s = get_struct_obj()
+    if not s: raise Exception("No struct found")
+    
+    global _ui_roots, _ui_stack
+    _ui_roots = []
+    _ui_stack = []
+    
+    inst = instrument_structure(s, "root")
+    inst.parse(bytes(data_list))
+    
+    def clean_node(n):
+        return {
+            "name": n['name'], "value": n['value'], "offset": n['offset'], "length": n['length'],
+            "rawValue": n['rawValue'] if isinstance(n['rawValue'], (int, str, bool, type(None))) else None,
+            "children": [clean_node(c) for c in n['children']]
+        }
+    
+    final_fields = [clean_node(n) for n in _ui_roots]
+    if len(final_fields) == 1 and final_fields[0]['name'] == 'root':
+            final_fields = final_fields[0]['children']
+            
+    import json
+    json.dumps({"fields": final_fields})
+except Exception as e:
+    import json
+    json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+`;
                 
-                // Run the code
-                console.log('Running Python code...');
-                const result = await pyodide.runPythonAsync(pythonCode);
-                console.log('Python execution complete, result:', result);
-                
+                const result = await pyodide.runPythonAsync(runnerCode);
                 const parsed = JSON.parse(result);
-                console.log('Parsed JSON:', parsed);
                 
-                if (parsed.error) {
-                    throw new Error(parsed.error + '\n' + (parsed.traceback || ''));
-                }
-                
+                if (parsed.error) throw new Error(parsed.error);
                 return parsed.fields || [];
-                
+
             } catch (error) {
                 console.error('Parse error:', error);
                 throw error;
             }
+        };
+
+const SmartInput = ({ field, value, onChange, onFocus }) => {
+            // Initial mode: integers use 'int', bytes default to 'hex'
+            const initialMode = field.info.type === 'integer' ? 'int' : 'hex';
+            const [mode, setMode] = useState(initialMode);
+            const [localValue, setLocalValue] = useState('');
+            const [isFocused, setIsFocused] = useState(false);
+            
+            // Ref for cursor management
+            const inputRef = useRef(null);
+            const cursorTarget = useRef(null);
+            
+            const type = field.info.type;
+            const size = field.info.size; // Size in bytes (undefined if dynamic)
+
+            // --- 1. Sync Logic (Parent -> Local) ---
+            useEffect(() => {
+                if (isFocused) return;
+
+                if (value === undefined || value === null) {
+                    setLocalValue('');
+                    return;
+                }
+
+                if (type === 'integer') {
+                    setLocalValue(value.toString());
+                } 
+                else if (type === 'bytes') {
+                    if (mode === 'text') {
+                        // Decode hex to text for display
+                        try {
+                            const hex = value.toString().replace(/[^0-9A-Fa-f]/g, '');
+                            let str = '';
+                            for (let i = 0; i < hex.length; i += 2) {
+                                const code = parseInt(hex.substr(i, 2), 16);
+                                // Filter printable ASCII
+                                str += (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+                            }
+                            setLocalValue(str);
+                        } catch (e) { setLocalValue(''); }
+                    } else {
+                        // Hex: Format as "AA BB CC"
+                        const clean = value.toString().replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                        const chunks = clean.match(/.{1,2}/g) || [];
+                        setLocalValue(chunks.join(' '));
+                    }
+                }
+            }, [value, isFocused, mode, type]);
+
+            // --- 2. Cursor Restoration Effect ---
+            // This runs immediately after render to put the cursor back where it belongs
+            useEffect(() => {
+                if (cursorTarget.current !== null && inputRef.current) {
+                    inputRef.current.setSelectionRange(cursorTarget.current, cursorTarget.current);
+                    cursorTarget.current = null;
+                }
+            }, [localValue]);
+
+            // --- 3. Change Handler (The "Hex Editor" Logic) ---
+            const handleChange = (e) => {
+                const newValue = e.target.value;
+                const selectionStart = e.target.selectionStart;
+
+                if (mode === 'int') {
+                    setLocalValue(newValue);
+                    // Standard integer validation
+                    if (/^(0x)?[0-9A-Fa-f]*$/.test(newValue)) {
+                        let num = newValue.startsWith('0x') ? parseInt(newValue, 16) : parseInt(newValue, 10);
+                        const maxVal = size ? Math.pow(2, size * 8) - 1 : Number.MAX_SAFE_INTEGER;
+                        if (!isNaN(num) && num <= maxVal) {
+                            onChange(field.id, num);
+                        }
+                    }
+                }
+                else if (mode === 'hex') {
+                    // --- Reactive Hex Logic ---
+                    
+                    // 1. Calculate how many *real* hex digits were before the cursor
+                    //    This helps us find the new position after we add spaces.
+                    const rawBeforeCursor = newValue.substring(0, selectionStart).replace(/[^0-9A-Fa-f]/g, '').length;
+                    
+                    // 2. Strip everything to raw hex
+                    let raw = newValue.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                    
+                    // 3. Enforce Size Limit (if defined)
+                    if (size && raw.length > size * 2) {
+                        // If we are over the limit, trim from the end (standard insert behavior)
+                        raw = raw.substring(0, size * 2);
+                    }
+                    
+                    // 4. Reformat with spaces (Reactive Spacing)
+                    const chunks = raw.match(/.{1,2}/g) || [];
+                    const formatted = chunks.join(' ');
+                    
+                    setLocalValue(formatted);
+
+                    // 5. Calculate new cursor position
+                    //    Find the index in 'formatted' that corresponds to 'rawBeforeCursor' hex digits
+                    let newPos = 0;
+                    let hexCount = 0;
+                    for (let i = 0; i < formatted.length; i++) {
+                        if (/[0-9A-Fa-f]/.test(formatted[i])) {
+                            hexCount++;
+                        }
+                        if (hexCount === rawBeforeCursor) {
+                            newPos = i + 1;
+                            break;
+                        }
+                    }
+                    
+                    // Small UX tweak: if landing on a space, jump over it
+                    if (formatted[newPos] === ' ') newPos++;
+
+                    // Schedule cursor update
+                    cursorTarget.current = newPos;
+
+                    // 6. Update Parent with Clean Hex
+                    onChange(field.id, raw);
+                }
+                else if (mode === 'text') {
+                    // --- Text Logic ---
+                    let text = newValue;
+                    
+                    // Limit Size
+                    if (size && text.length > size) {
+                        text = text.substring(0, size);
+                    }
+                    
+                    setLocalValue(text);
+                    
+                    // Convert to Hex for parent
+                    let hex = '';
+                    for (let i = 0; i < text.length; i++) {
+                        hex += text.charCodeAt(i).toString(16).padStart(2, '0');
+                    }
+                    onChange(field.id, hex.toUpperCase());
+                }
+            };
+
+            const toggleMode = () => {
+                setMode(mode === 'hex' ? 'text' : 'hex');
+                setIsFocused(false); // Trigger re-sync
+            };
+
+            const getTypeLabel = () => {
+                if (type === 'integer') return `${field.info.signed ? 'i' : 'u'}${size * 8}`;
+                if (type === 'bytes') return `byte[${size || '∞'}]`;
+                return type;
+            };
+
+            const getIcon = () => {
+                if (mode === 'int') return '🔢';
+                if (mode === 'hex') return '0x';
+                if (mode === 'text') return 'Aa';
+                return '📝';
+            };
+
+            const isConst = type === 'const';
+
+            return (
+                <div className={`group bg-gray-900 border ${isFocused ? 'border-blue-500' : 'border-gray-800'} hover:border-blue-500/50 rounded-md p-2 transition-all`}>
+                    <div className="flex justify-between items-center mb-1">
+                        <div className="flex items-center gap-2">
+                            <label className="text-xs font-semibold text-gray-400 group-hover:text-blue-400 transition-colors">
+                                {field.name}
+                            </label>
+                            {/* Toggle Button */}
+                            {type === 'bytes' && !isConst && (
+                                <button 
+                                    onClick={toggleMode}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-blue-300 border border-gray-700 transition-colors"
+                                    title={`Switch to ${mode === 'hex' ? 'Text' : 'Hex'} input`}
+                                >
+                                    {mode === 'hex' ? 'HEX' : 'TXT'}
+                                </button>
+                            )}
+                        </div>
+                        <span className="text-[10px] uppercase tracking-wider text-gray-600 font-mono bg-gray-800 px-1 rounded">
+                            {getTypeLabel()}
+                        </span>
+                    </div>
+                    
+                    <div className="relative">
+                        <div className="absolute left-2 top-1/2 transform -translate-y-1/2 opacity-50 text-xs grayscale font-mono font-bold select-none">
+                            {getIcon()}
+                        </div>
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={isConst ? field.info.value : localValue}
+                            onChange={handleChange}
+                            onFocus={() => { setIsFocused(true); onFocus && onFocus(field.id); }}
+                            onBlur={() => setIsFocused(false)}
+                            readOnly={isConst}
+                            // We don't use maxLength here for Hex because spaces inflate the length.
+                            // We handle limits in handleChange instead.
+                            placeholder={mode === 'hex' ? 'FF 00 AA...' : 'Enter text...'}
+                            className={`w-full bg-black/30 border border-gray-700 rounded px-2 py-1 pl-8 text-sm font-mono focus:outline-none focus:border-blue-500 transition-colors ${
+                                isConst ? 'opacity-50 cursor-not-allowed text-gray-500' : 'text-blue-100'
+                            }`}
+                        />
+                    </div>
+                </div>
+            );
+        };
+
+        const LiveBuilder = ({ pyodide, structDef, onBuildComplete }) => { 
+            const [schema, setSchema] = useState([]);
+            const [values, setValues] = useState({});
+            const [status, setStatus] = useState("Initializing...");
+            const [error, setError] = useState(null);
+            
+            // Load Schema on Mount
+                useEffect(() => {
+                const loadSchema = async () => {
+                    try {
+                        if (!pyodide) return;
+                        
+                        // 1. Define the user's struct in Python first!
+                        await pyodide.runPythonAsync(structDef);
+
+                        // 2. Now ask for the schema
+                        const res = await pyodide.runPythonAsync(`
+                            import json
+                            json.dumps(get_schema_json())
+                        `);                        
+                        const data = JSON.parse(res);
+                        
+                        if (data.error) {
+                            setError(data.error);
+                            setSchema([]);
+                        } else {
+                            setSchema(data.schema || []);
+                            setError(null);
+                            setStatus("Ready");
+                            
+                            // Initialize default values based on schema
+                            const defaults = {};
+                            data.schema.forEach(f => {
+                                if (f.info.type === 'const') return;
+                                defaults[f.id] = f.info.type === 'bytes' ? '00'.repeat(f.info.size || 1) : 0;
+                            });
+                            setValues(defaults);
+                        }
+                    } catch (e) {
+                        setError("Failed to load struct schema: " + e.message);
+                    }
+                };
+                loadSchema();
+            }, [pyodide, structDef]);
+
+            // Debounced Live Build
+            useEffect(() => {
+                if (schema.length === 0 || !pyodide) return;
+
+                const timer = setTimeout(async () => {
+                    setStatus("Building...");
+                    try {
+                        const jsonValues = JSON.stringify(values);
+                        // We need to escape the JSON string for Python
+                        const safeJson = jsonValues.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                        
+                        const res = await pyodide.runPythonAsync(`
+                            import json
+                            json.dumps(build_and_parse_live('${safeJson}'))
+                        `);
+                        
+                        const result = JSON.parse(res);
+                        
+                        if (result.error) {
+                            // Don't show hard error overlay, just status
+                            setStatus("Build Invalid: " + result.error.split('\n').pop());
+                        } else {
+                            // Convert hex string back to Uint8Array
+                            const hex = result.hex;
+                            const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                            
+                            onBuildComplete(bytes, result.fields);
+                            setStatus("✓ Live Preview Updated");
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        setStatus("Build Error");
+                    }
+                }, 300); // 300ms debounce
+
+                return () => clearTimeout(timer);
+            }, [values, schema, pyodide]);
+
+            const handleValueChange = (id, val) => {
+                setValues(prev => ({ ...prev, [id]: val }));
+            };
+
+            const handleFocus = (id) => {
+                // Future: Highlight field in hex view
+            };
+
+            return (
+                <div className="flex flex-col h-full bg-[#0d1117]">
+                    <div className="p-3 border-b border-gray-800 bg-[#161b22]">
+                        <div className="flex justify-between items-center">
+                            <h3 className="font-semibold text-blue-400">Live Builder</h3>
+                            <span className={`text-xs px-2 py-0.5 rounded ${status.startsWith('✓') ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-400'}`}>
+                                {status}
+                            </span>
+                        </div>
+                        {error && <div className="text-xs text-red-400 mt-1">{error}</div>}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin">
+                        {schema.length === 0 && !error && (
+                            <div className="text-center text-gray-600 mt-10">
+                                <div className="loading-spinner w-6 h-6 border-2 mx-auto mb-2"></div>
+                                Analyzing Structure...
+                            </div>
+                        )}
+                        
+                        {schema.map(field => (
+                            <SmartInput 
+                                key={field.id} 
+                                field={field} 
+                                value={values[field.id]} 
+                                onChange={handleValueChange}
+                                onFocus={handleFocus}
+                            />
+                        ))}
+                        
+                        <div className="mt-8 p-3 bg-blue-900/10 border border-blue-500/20 rounded text-xs text-blue-300/70">
+                            💡 Data is built & parsed in real-time. The Hex View on the right reflects your changes instantly.
+                        </div>
+                    </div>
+                </div>
+            );
         };
 
         // Hex View Component with Virtual Scrolling
@@ -1489,7 +1840,6 @@ json.dumps(result)
                 if (inputMode === 'hex') {
                     // Remove spaces to get raw hex
                     const newHex = input.replace(/\s/g, '').toUpperCase();
-                    const oldHex = value.replace(/\s/g, '');
                     
                     // Ensure we don't exceed field length
                     const maxChars = field.length * 2;
@@ -1990,124 +2340,6 @@ json.dumps(result)
             );
         };
 
-        // Build Form Component
-        const BuildForm = ({ structDef, buildValues, onValueChange, onBuild, isParsing }) => {
-            const [fields, setFields] = useState([]);
-            
-            useEffect(() => {
-                // Extract field definitions from struct
-                const extractFields = () => {
-                    const fieldDefs = [];
-                    const lines = structDef.split('\n');
-                    
-                    for (const line of lines) {
-                        // Match: "field_name" / Type
-                        const match = line.match(/^\s*"([^"]+)"\s*\/\s*(\w+)(\(([^)]+)\))?/);
-                        if (match) {
-                            const [, name, type, , args] = match;
-                            fieldDefs.push({
-                                name,
-                                type,
-                                args: args || '',
-                                placeholder: getPlaceholder(type, args)
-                            });
-                        }
-                    }
-                    
-                    return fieldDefs;
-                };
-                
-                setFields(extractFields());
-            }, [structDef]);
-            
-            const getPlaceholder = (type, args) => {
-                if (type === 'Bytes') {
-                    const size = args || '4';
-                    return 'FF EE DD CC'.substring(0, parseInt(size) * 3 - 1);
-                } else if (type.startsWith('Int')) {
-                    if (type.includes('8')) return '255';
-                    if (type.includes('16')) return '65535';
-                    if (type.includes('32')) return '4294967295';
-                    return '0';
-                } else {
-                    return 'value';
-                }
-            };
-            
-            return (
-                <div className="p-4 h-full overflow-auto scrollbar-thin">
-                    <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-2" style={{ color: '#58a6ff' }}>
-                            🔨 Build Binary from Template
-                        </h3>
-                        <p className="text-sm opacity-70 mb-2">
-                            Fill in values for each field. Full Construct support including encryption, compression, and dynamic defaults.
-                        </p>
-                        <div className="text-xs p-2 rounded mb-3" style={{ background: 'rgba(87, 171, 90, 0.1)', border: '1px solid rgba(87, 171, 90, 0.3)', color: '#57ab5a' }}>
-                            ✅ <strong>Full Support:</strong> All Construct types supported (EncryptedSym, Compressed, Default, etc.).
-                            {fields.some(f => f.name === 'key' || f.name === 'iv') && (
-                                <div className="mt-2 pt-2 border-t border-current">
-                                    🔐 <strong>Encryption Tip:</strong> For encrypted structures, provide key/iv as hex bytes. 
-                                    The inner encrypted fields (width, height, etc.) will be automatically encrypted during build.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                    
-                    {fields.length === 0 ? (
-                        <div className="text-center py-8 opacity-50">
-                            <p>No fields detected in structure.</p>
-                            <p className="text-xs mt-2">Make sure your Construct definition is valid.</p>
-                        </div>
-                    ) : (
-                        <div className="space-y-3">
-                            {fields.map((field) => (
-                                <div key={field.name} className="flex flex-col gap-1">
-                                    <label className="text-sm font-semibold" style={{ color: '#8b949e' }}>
-                                        {field.name}
-                                        <span className="ml-2 text-xs opacity-60">({field.type})</span>
-                                    </label>
-                                    <input
-                                        type="text"
-                                        className="px-3 py-2 rounded font-mono text-sm"
-                                        style={{
-                                            background: '#0d1117',
-                                            border: '1px solid #30363d',
-                                            color: '#c9d1d9'
-                                        }}
-                                        placeholder={field.placeholder}
-                                        value={buildValues[field.name] || ''}
-                                        onChange={(e) => onValueChange(field.name, e.target.value)}
-                                    />
-                                </div>
-                            ))}
-                            <div className="text-xs opacity-50 mt-2">
-                                💡 Tip: For hex values use space-separated bytes (FF EE DD CC). For encryption, inner fields are auto-encrypted.
-                            </div>
-                        </div>
-                    )}
-                    
-                    <div className="mt-6 flex gap-2">
-                        <button
-                            onClick={onBuild}
-                            disabled={isParsing || fields.length === 0}
-                            className="px-6 py-2 rounded font-semibold"
-                            style={{
-                                background: '#238636',
-                                border: '1px solid #2ea043',
-                                color: '#fff'
-                            }}
-                        >
-                            {isParsing ? 'Building...' : '🔨 Build Binary'}
-                        </button>
-                        <div className="text-xs opacity-50 flex items-center">
-                            Press Build to create binary from your values
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
         // Structure Tree Component
         const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit, onHover }) => {
             const [expanded, setExpanded] = useState(true);
@@ -2295,19 +2527,12 @@ format_struct = Struct(
                     setIsLoading(false);
                     setParseStatus('>>> Python environment ready');
                     
-                    // Template library diagnostics
-                    console.log('📚 CONSTRUCT_LIBRARY loaded with', Object.keys(CONSTRUCT_LIBRARY).length, 'templates');
-                    console.log('Available templates:', Object.keys(CONSTRUCT_LIBRARY).sort().join(', '));
-                    
                     // Check URL parameters for template
                     const urlParams = new URLSearchParams(window.location.search);
                     const template = urlParams.get('template');
                     if (template && CONSTRUCT_LIBRARY[template]) {
                         setStructDef(CONSTRUCT_LIBRARY[template].code);
                         setParseStatus(`>>> Loaded template: ${CONSTRUCT_LIBRARY[template].name}`);
-                    } else if (template) {
-                        console.error('Template from URL not found:', template);
-                        setParseStatus(`>>> Error: Template "${template}" not found`);
                     }
                 }).catch(err => {
                     setError('Failed to initialize Pyodide: ' + err.message);
@@ -2419,7 +2644,7 @@ format_struct = Struct(
                 reader.readAsArrayBuffer(file);
             };
             
-            // PCAP parsing function (supports both PCAP and PCAPNG)
+            // PCAP parsing function
             const parsePcap = (data) => {
                 const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
                 const packets = [];
@@ -2428,13 +2653,13 @@ format_struct = Struct(
                 const magic = view.getUint32(0, true);
                 const magicBE = view.getUint32(0, false);
                 
-                // PCAPNG format: 0x0A0D0D0A (Section Header Block)
+                // PCAPNG format: 0x0A0D0D0A
                 if (magic === 0x0A0D0D0A) {
                     console.log('PCAPNG format detected');
                     return parsePcapNG(data, view);
                 }
                 
-                // PCAP format: 0xa1b2c3d4 (LE) or 0xd4c3b2a1 (BE)
+                // PCAP format
                 const isLittleEndian = magic === 0xa1b2c3d4;
                 const isBigEndian = magicBE === 0xd4c3b2a1;
                 
@@ -2442,14 +2667,10 @@ format_struct = Struct(
                     throw new Error('Not a valid PCAP/PCAPNG file (invalid magic number)');
                 }
                 
-                console.log(`PCAP file detected, endianness: ${isLittleEndian ? 'little' : 'big'}`);
-                
-                // PCAP Global Header is 24 bytes
                 let offset = 24;
                 let packetNum = 0;
                 
                 while (offset + 16 <= data.length) {
-                    // Packet Header (16 bytes):
                     const ts_sec = view.getUint32(offset, isLittleEndian);
                     const ts_usec = view.getUint32(offset + 4, isLittleEndian);
                     const incl_len = view.getUint32(offset + 8, isLittleEndian);
@@ -2457,10 +2678,7 @@ format_struct = Struct(
                     
                     offset += 16;
                     
-                    if (offset + incl_len > data.length) {
-                        console.warn(`Packet ${packetNum} truncated`);
-                        break;
-                    }
+                    if (offset + incl_len > data.length) break;
                     
                     const packetData = new Uint8Array(data.buffer, data.byteOffset + offset, incl_len);
                     
@@ -2476,64 +2694,44 @@ format_struct = Struct(
                     offset += incl_len;
                     packetNum++;
                 }
-                
-                console.log(`Parsed ${packets.length} packets from PCAP`);
                 return packets;
             };
             
-            // PCAPNG parsing function (simplified - only extracts Enhanced Packet Blocks)
             const parsePcapNG = (data, view) => {
                 const packets = [];
                 let offset = 0;
                 let packetNum = 0;
                 
                 while (offset + 12 <= data.length) {
-                    // Block type (4 bytes) + Block total length (4 bytes)
                     const blockType = view.getUint32(offset, true);
                     const blockLen = view.getUint32(offset + 4, true);
                     
-                    if (blockLen < 12 || offset + blockLen > data.length) {
-                        console.warn(`Invalid block at offset ${offset}`);
-                        break;
-                    }
+                    if (blockLen < 12 || offset + blockLen > data.length) break;
                     
-                    // Enhanced Packet Block (type 0x00000006) or Simple Packet Block (type 0x00000003)
-                    if (blockType === 0x00000006) {
-                        // Enhanced Packet Block
-                        // Skip: interface ID (4), timestamp high (4), timestamp low (4)
+                    if (blockType === 0x00000006) { // Enhanced Packet Block
                         const capturedLen = view.getUint32(offset + 20, true);
                         const originalLen = view.getUint32(offset + 24, true);
-                        
-                        const dataOffset = offset + 28; // After EPB header
+                        const dataOffset = offset + 28;
                         
                         if (dataOffset + capturedLen <= offset + blockLen) {
                             const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
-                            
-                            const tsHigh = view.getUint32(offset + 12, true);
-                            const tsLow = view.getUint32(offset + 16, true);
-                            const timestamp = (tsHigh * 0x100000000 + tsLow) / 1000000; // Microseconds to seconds
-                            
                             packets.push({
                                 index: packetNum,
-                                timestamp: timestamp,
+                                timestamp: 0, 
                                 capturedLength: capturedLen,
                                 originalLength: originalLen,
                                 data: packetData,
                                 offset: dataOffset
                             });
-                            
                             packetNum++;
                         }
-                    } else if (blockType === 0x00000003) {
-                        // Simple Packet Block (older format)
+                    } else if (blockType === 0x00000003) { // Simple Packet Block
                         const originalLen = view.getUint32(offset + 8, true);
                         const capturedLen = Math.min(originalLen, blockLen - 16);
-                        
                         const dataOffset = offset + 12;
                         
                         if (dataOffset + capturedLen <= offset + blockLen) {
                             const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
-                            
                             packets.push({
                                 index: packetNum,
                                 timestamp: 0,
@@ -2542,15 +2740,11 @@ format_struct = Struct(
                                 data: packetData,
                                 offset: dataOffset
                             });
-                            
                             packetNum++;
                         }
                     }
-                    
                     offset += blockLen;
                 }
-                
-                console.log(`Parsed ${packets.length} packets from PCAPNG`);
                 return packets;
             };
             
@@ -2558,29 +2752,22 @@ format_struct = Struct(
                 if (!isPcapFile || newIndex < 0 || newIndex >= pcapPackets.length) return;
                 
                 const packet = pcapPackets[newIndex];
-                console.log(`📦 Switching to packet ${newIndex}, size: ${packet.data.length} bytes`);
-                console.log(`📦 First 16 bytes: ${Array.from(packet.data.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
-                
                 setCurrentPacketIndex(newIndex);
                 setFileData(packet.data);
                 setOriginalFileData(new Uint8Array(packet.data));
                 setHasUnsavedChanges(false);
                 setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
-                
-                // Parse will be triggered automatically by useEffect when fileData changes
             };
 
             const flattenFields = (fields, list = []) => {
                 fields.forEach((field, topLevelIndex) => {
-                    // For top-level fields, add them with their index
                     list.push({
                         offset: field.offset,
                         length: field.length,
-                        topLevelIndex: topLevelIndex,  // Track which top-level struct this belongs to
+                        topLevelIndex: topLevelIndex,
                         name: field.name,
                         value: field.value
                     });
-                    // For nested children, inherit the parent's top-level index
                     if (field.children) {
                         flattenFieldsNested(field.children, list, topLevelIndex, field.name);
                     }
@@ -2593,7 +2780,7 @@ format_struct = Struct(
                     list.push({
                         offset: field.offset,
                         length: field.length,
-                        topLevelIndex: topLevelIndex,  // Inherit parent's top-level index
+                        topLevelIndex: topLevelIndex,
                         name: parentName + '.' + field.name,
                         value: field.value
                     });
@@ -2606,38 +2793,24 @@ format_struct = Struct(
             const handleParse = async (isAuto = false) => {
                 if (!fileData || !pyodideReady) return;
                 
-                // Only clear previous error if this is a manual parse (or if you want to clear it on typing start)
                 if (!isAuto) setError(null);
-                
-                // Update status only for manual to reduce flicker, or use a subtle message for auto
                 if (!isAuto) setParseStatus('>>> Parsing structure...');
                 
                 setIsParsing(true);
                 
                 try {
                     const fields = await parseWithConstruct(fileData, structDef);
-                    
-                    // SUCCESS: Always update everything
                     setParsedFields(fields);
                     setHighlightRanges(flattenFields(fields));
                     setParseStatus(`>>> Parse complete: ${fields.length} fields`);
-                    setError(null); // Clear any lingering errors
+                    setError(null);
                     
                 } catch (err) {
                     console.warn('Parse failed:', err.message);
-                    
                     if (isAuto) {
-                        // AUTO MODE: Silent fail
-                        // 1. Don't set 'error' (No red box)
-                        // 2. Show subtle status
                         setParseStatus('>>> ...'); 
-                        
-                        // Optional: You might want to NOT clear the old fields while typing
-                        // so the tree doesn't disappear instantly on a syntax error.
-                        // If you prefer clearing: setParsedFields([]); 
                     } else {
-                        // MANUAL MODE: Loud fail
-                        setError(err.message); // Shows red box
+                        setError(err.message);
                         setParsedFields([]);
                         setHighlightRanges([]);
                         setParseStatus('>>> Parse error');
@@ -2647,59 +2820,38 @@ format_struct = Struct(
                 }
             };
 
-            const handleFieldSelect = (field) => {
-                setSelectedField(field);
-            };
-            
-            const handleFieldHover = (field) => {
-                setHoveredField(field);
-            };
-            
-            const handleFieldEdit = (field) => {
-                setEditingField(field);
-            };
-            
-            const handleExportField = (field, format) => {
-                if (!fileData || !field || field.length === 0) return;
-                
-                // Extract the field's bytes from fileData
-                const fieldBytes = fileData.slice(field.offset, field.offset + field.length);
-                
-                if (format === 'python') {
-                    // Generate Python bytes literal
-                    const hexBytes = Array.from(fieldBytes)
-                        .map(b => '\\x' + b.toString(16).padStart(2, '0'))
-                        .join('');
-                    const pythonCode = `b"${hexBytes}"`;
-                    
-                    // Copy to clipboard
-                    navigator.clipboard.writeText(pythonCode).then(() => {
-                        setParseStatus(`>>> Copied ${field.name} as Python bytes (${field.length} bytes)`);
-                    }).catch(err => {
-                        console.error('Failed to copy:', err);
-                        // Fallback: show in alert
-                        alert(`Python bytes:\n${pythonCode}`);
-                    });
-                } else if (format === 'file') {
-                    // Save as binary file
-                    const blob = new Blob([fieldBytes], { type: 'application/octet-stream' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    
-                    // Generate safe filename
-                    const safeFieldName = field.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-                    const baseFileName = fileName.replace(/\.[^.]+$/, '');
-                    a.download = `${baseFileName}_${safeFieldName}.bin`;
-                    
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    
-                    setParseStatus(`>>> Exported ${field.name} to file (${field.length} bytes)`);
-                }
-            };
+            const handleFieldSelect = (field) => { setSelectedField(field); };
+            const handleFieldHover = (field) => { setHoveredField(field); };
+            const handleFieldEdit = (field) => { setEditingField(field); };
             
             // Expose to window for menu callbacks
+            useEffect(() => {
+                window.onExportField = (field, format) => {
+                    if (!fileData || !field || field.length === 0) return;
+                    const fieldBytes = fileData.slice(field.offset, field.offset + field.length);
+                    
+                    if (format === 'python') {
+                        const hexBytes = Array.from(fieldBytes)
+                            .map(b => '\\x' + b.toString(16).padStart(2, '0'))
+                            .join('');
+                        const pythonCode = `b"${hexBytes}"`;
+                        navigator.clipboard.writeText(pythonCode).then(() => {
+                            setParseStatus(`>>> Copied ${field.name} as Python bytes`);
+                        });
+                    } else if (format === 'file') {
+                        const blob = new Blob([fieldBytes], { type: 'application/octet-stream' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        const safeFieldName = field.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+                        a.download = `${fileName}_${safeFieldName}.bin`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setParseStatus(`>>> Exported ${field.name} to file`);
+                    }
+                };
+            }, [fileData, fileName]);
+
             useEffect(() => {
                 if (!fileData || !pyodideReady) return;
                 
@@ -2711,40 +2863,32 @@ format_struct = Struct(
                 if (!hasRealContent) return;
                 
                 if (isPcapFile) {
-                    handleParse(true); // <--- Auto-parse
+                    handleParse(true);
                     return;
                 }
                 
-                if (parseTimeoutRef.current) {
-                    clearTimeout(parseTimeoutRef.current);
-                }
+                if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
                 
                 parseTimeoutRef.current = setTimeout(() => {
-                    handleParse(true); // <--- Auto-parse
+                    handleParse(true);
                 }, 500);
                 
                 return () => {
-                    if (parseTimeoutRef.current) {
-                        clearTimeout(parseTimeoutRef.current);
-                    }
+                    if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
                 };
             }, [structDef, fileData, pyodideReady, isPcapFile]);
             
             const handleSaveEdit = (offset, newBytes) => {
-                // Create a new array with the edited bytes
                 const newData = new Uint8Array(fileData);
                 newData.set(newBytes, offset);
                 setFileData(newData);
                 setHasUnsavedChanges(true);
                 setParseStatus(`>>> Field edited at 0x${offset.toString(16)}`);
-                
-                // Re-parse to update the display
                 setTimeout(() => handleParse(), 100);
             };
             
             const handleSaveFile = () => {
                 if (!fileData) return;
-                
                 const blob = new Blob([fileData], { type: 'application/octet-stream' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -2752,7 +2896,6 @@ format_struct = Struct(
                 a.download = fileName.replace(/(\.[^.]+)?$/, '_modified$1');
                 a.click();
                 URL.revokeObjectURL(url);
-                
                 setHasUnsavedChanges(false);
                 setOriginalFileData(new Uint8Array(fileData));
                 setParseStatus('>>> File saved');
@@ -2770,137 +2913,11 @@ format_struct = Struct(
             const toggleBuildMode = () => {
                 const newMode = !isBuildMode;
                 setIsBuildMode(newMode);
-                
                 if (newMode) {
-                    // Entering build mode
                     setParseStatus('>>> 🔨 Build Mode: Create binary from template');
                     setBuildValues({});
                 } else {
-                    // Leaving build mode  
                     setParseStatus('>>> Parse Mode');
-                }
-            };
-            
-            const handleBuildValueChange = (fieldPath, value) => {
-                setBuildValues(prev => ({
-                    ...prev,
-                    [fieldPath]: value
-                }));
-            };
-            
-            const handleBuildFromTemplate = async () => {
-                if (!pyodideReady) return;
-                
-                setIsParsing(true);
-                setError(null);
-                setParseStatus('>>> Building binary...');
-                
-                try {
-                    const valuesJson = JSON.stringify(buildValues);
-                    
-                    const pythonCode = `
-import json
-import os
-from construct import *
-
-# Import cryptography if available for EncryptedSym
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives.ciphers import aead
-    from cryptography.hazmat.backends import default_backend
-except ImportError:
-    pass
-
-# Import compression libraries
-try:
-    import zlib, gzip, bz2, lzma
-except ImportError:
-    pass
-
-# User's structure definition (with full support)
-${structDef}
-
-# Find structure
-struct_obj = None
-for name in ['format_struct', 'fomrst_struct', 'struct', 'format', 'packet', 'header']:
-    if name in globals() and isinstance(globals()[name], Construct):
-        struct_obj = globals()[name]
-        break
-
-if not struct_obj:
-    raise Exception("No Construct structure found. Define format_struct = Struct(...)")
-
-values_dict = json.loads('''${valuesJson}''')
-
-# Build container from values
-container = Container()
-
-for key, value in values_dict.items():
-    if isinstance(value, str):
-        # Try to parse as hex
-        clean_value = value.replace(' ', '').replace('\\n', '').strip()
-        if all(c in '0123456789ABCDEFabcdef' for c in clean_value) and len(clean_value) % 2 == 0:
-            # Hex string
-            container[key] = bytes.fromhex(clean_value)
-        else:
-            # Try as number first
-            try:
-                # Check if it looks like a number
-                if clean_value.isdigit() or (clean_value.startswith('-') and clean_value[1:].isdigit()):
-                    container[key] = int(value)
-                else:
-                    # Keep as string bytes
-                    container[key] = value.encode('utf-8') if isinstance(value, str) else value
-            except ValueError:
-                # Keep as string
-                container[key] = value.encode('utf-8') if isinstance(value, str) else value
-    else:
-        container[key] = value
-
-# Build binary with context support
-# Note: For encryption, the key/iv are read from the container itself during build
-binary_data = struct_obj.build(container)
-binary_data.hex()
-`;
-
-                    const hexResult = await pyodide.runPythonAsync(pythonCode);
-                    
-                    // Convert hex to bytes
-                    const bytes = [];
-                    for (let i = 0; i < hexResult.length; i += 2) {
-                        bytes.push(parseInt(hexResult.substr(i, 2), 16));
-                    }
-                    
-                    const builtData = new Uint8Array(bytes);
-                    setFileData(builtData);
-                    setOriginalFileData(new Uint8Array(builtData));
-                    setFileName('built.bin');
-                    setHasUnsavedChanges(true);
-                    setParseStatus(`>>> ✅ Built ${builtData.length} bytes`);
-                    
-                    // Auto-parse the built data
-                    setTimeout(() => handleParse(), 100);
-                    
-                } catch (err) {
-                    console.error('Build error:', err);
-                    
-                    // Extract meaningful error message
-                    let errorMsg = err.message;
-                    if (errorMsg.includes('PythonError:')) {
-                        // Try to extract the actual error
-                        const lines = errorMsg.split('\n');
-                        for (let i = lines.length - 1; i >= 0; i--) {
-                            if (lines[i].trim() && !lines[i].includes('File ') && !lines[i].includes('at ')) {
-                                errorMsg = lines[i].trim();
-                                break;
-                            }
-                        }
-                    }
-                    
-                    setError('Build failed: ' + errorMsg);
-                    setParseStatus('>>> ❌ Build failed');
-                } finally {
-                    setIsParsing(false);
                 }
             };
 
@@ -2909,11 +2926,7 @@ binary_data.hex()
                     alert('Please load a file and parse it first!');
                     return;
                 }
-                
-                // Generate SVG
                 const svg = generateSVG(fileData, parsedFields);
-                
-                // Create blob and download
                 const blob = new Blob([svg], { type: 'image/svg+xml' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -2921,7 +2934,6 @@ binary_data.hex()
                 a.download = `${fileName}_structure.svg`;
                 a.click();
                 URL.revokeObjectURL(url);
-                
                 setParseStatus('>>> SVG exported successfully');
             };
             
@@ -2933,18 +2945,10 @@ binary_data.hex()
                 const hexWidth = bytesPerLine * charWidth * 3;
                 const margin = 20;
                 const headerHeight = 60;
-                
-                // Color palette (matches CSS)
-                const colors = [
-                    '#f85149', '#f6ad55', '#57ab5a', '#58a6ff',
-                    '#bc80f0', '#ff79c6', '#79c0ff', '#ff9e64'
-                ];
-                
-                // Build the flattened list with top-level tracking
+                const colors = ['#f85149', '#f6ad55', '#57ab5a', '#58a6ff', '#bc80f0', '#ff79c6', '#79c0ff', '#ff9e64'];
                 const flattenedRanges = flattenFields(fields);
-                
-                // Group ranges by top-level index for legend
                 const topLevelGroups = [];
+                
                 fields.forEach((field, idx) => {
                     const groupRanges = flattenedRanges.filter(r => r.topLevelIndex === idx);
                     if (groupRanges.length > 0) {
@@ -2956,16 +2960,11 @@ binary_data.hex()
                     }
                 });
                 
-                // Calculate SVG dimensions
                 const numLines = Math.ceil(data.length / bytesPerLine);
                 const hexViewHeight = numLines * lineHeight + headerHeight;
-                
-                // Legend height based on number of ranges (not groups)
                 const legendHeight = flattenedRanges.length * 25 + 40;
                 const totalHeight = hexViewHeight + legendHeight + margin * 3;
                 const totalWidth = offsetWidth + hexWidth + margin * 4;
-                
-                console.log(`SVG Export: ${flattenedRanges.length} ranges in ${topLevelGroups.length} top-level groups`);
                 
                 let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${totalWidth}" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
@@ -2980,33 +2979,19 @@ binary_data.hex()
       .field-value { fill: #8b949e; font-size: 11px; }
     </style>
   </defs>
-  
-  <!-- Background -->
   <rect width="${totalWidth}" height="${totalHeight}" fill="#0d1117"/>
-  
-  <!-- Header -->
   <text x="${margin}" y="${margin + 20}" class="title">Binary Structure Visualization</text>
   <text x="${margin}" y="${margin + 38}" class="subtitle">File: ${fileName} (${data.length} bytes)</text>
-  
-  <!-- Hex Dump -->
   <g transform="translate(${margin}, ${headerHeight})">
 `;
-                
-                // Draw hex dump with highlights using top-level coloring
                 for (let i = 0; i < data.length; i += bytesPerLine) {
                     const lineNum = Math.floor(i / bytesPerLine);
                     const y = lineNum * lineHeight + 20;
-                    
-                    // Offset
                     svg += `    <text x="0" y="${y}" class="offset">${i.toString(16).padStart(8, '0').toUpperCase()}</text>\n`;
-                    
-                    // Hex bytes
                     for (let j = 0; j < bytesPerLine && i + j < data.length; j++) {
                         const byte = data[i + j];
                         const x = offsetWidth + j * charWidth * 3;
                         const byteIndex = i + j;
-                        
-                        // Find which range this byte belongs to
                         let rangeColor = null;
                         for (let r = 0; r < flattenedRanges.length; r++) {
                             const range = flattenedRanges[r];
@@ -3015,35 +3000,25 @@ binary_data.hex()
                                 break;
                             }
                         }
-                        
                         if (rangeColor) {
                             svg += `    <rect x="${x - 2}" y="${y - 14}" width="${charWidth * 2.5}" height="16" fill="${rangeColor}" opacity="0.3" rx="2"/>\n`;
                         }
-                        
                         svg += `    <text x="${x}" y="${y}" class="hex">${byte.toString(16).padStart(2, '0').toUpperCase()}</text>\n`;
                     }
                 }
-                
                 svg += `  </g>\n`;
-                
-                // Legend - grouped by top-level structure
                 const legendY = hexViewHeight + margin * 2;
                 svg += `  <g transform="translate(${margin}, ${legendY})">
     <text x="0" y="0" class="title" font-size="14">Parsed Fields (Colored by Top-Level Structure)</text>
 `;
-                
                 let currentY = 10;
                 topLevelGroups.forEach((group) => {
-                    // Group header
                     currentY += 25;
                     svg += `    <rect x="0" y="${currentY - 12}" width="12" height="12" fill="${group.color}" opacity="0.6" rx="2"/>\n`;
                     svg += `    <text x="18" y="${currentY}" class="field-name" font-weight="600">${group.name}</text>\n`;
-                    
-                    // Group members (indented)
                     group.ranges.forEach((range) => {
                         currentY += 20;
                         const fieldValue = range.value || '';
-                        
                         svg += `    <rect x="20" y="${currentY - 10}" width="8" height="8" fill="${group.color}" opacity="0.4" rx="1"/>\n`;
                         svg += `    <text x="35" y="${currentY}" class="field-value" font-size="11">${range.name}</text>\n`;
                         svg += `    <text x="250" y="${currentY}" class="field-value">@0x${range.offset.toString(16).padStart(4, '0')} (${range.length} bytes)</text>\n`;
@@ -3053,32 +3028,21 @@ binary_data.hex()
                         }
                     });
                 });
-                
-                svg += `  </g>\n`;
-                svg += `</svg>`;
-                
+                svg += `  </g>\n</svg>`;
                 return svg;
             };
 
             const loadSampleFile = () => {
-                // Create a sample binary file (ZIP header-like)
-                // 4 + 2 + 2 + 4 + 8 + 4 = 24 bytes total
                 const sample = new Uint8Array([
-                    0x50, 0x4B, 0x03, 0x04,                         // Magic: PK (ZIP signature) - 4 bytes
-                    0x14, 0x00,                                     // Version: 20 (0x0014) - 2 bytes  
-                    0x00, 0x00,                                     // Flags: 0 - 2 bytes
-                    0x08, 0x00, 0x00, 0x00,                         // Size: 8 - 4 bytes
-                    0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x57, 0x6F, // Data: "Hello Wo" - 8 bytes
-                    0xDE, 0xAD, 0xBE, 0xEF                          // Checksum: 0xEFBEADDE - 4 bytes
+                    0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 
+                    0x08, 0x00, 0x00, 0x00, 0x48, 0x65, 0x6C, 0x6C, 
+                    0x6F, 0x20, 0x57, 0x6F, 0xDE, 0xAD, 0xBE, 0xEF
                 ]);
-                
                 setFileData(sample);
                 setOriginalFileData(new Uint8Array(sample));
                 setHasUnsavedChanges(false);
                 setFileName('sample.bin');
                 setParseStatus(`>>> Sample loaded: ${sample.length} bytes`);
-                
-                // Set sample structure
                 setStructDef(`# Sample ZIP-like structure
 format_struct = Struct(
     "magic" / Bytes(4),
@@ -3112,80 +3076,33 @@ format_struct = Struct(
                         />
                     )}
                     
-                    {/* Header */}
                     <header className="terminal-border p-4" style={{ background: '#161b22' }}>
                         <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-4">
-                                <h1 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>
-                                    BinTV
-                                </h1>
+                                <h1 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>BinTV</h1>
                                 <span className="text-sm opacity-70">Binary Structure Viewer v1.0</span>
                                 {hasUnsavedChanges && (
-                                    <span className="text-sm px-2 py-1 rounded" style={{ background: '#f6ad55', color: '#000' }}>
-                                        • Modified
-                                    </span>
+                                    <span className="text-sm px-2 py-1 rounded" style={{ background: '#f6ad55', color: '#000' }}>• Modified</span>
                                 )}
                             </div>
                             
                             <div className="flex items-center space-x-2">
-                                <button
-                                    onClick={loadSampleFile}
-                                    disabled={isLoading}
-                                    className="px-4 py-2 btn-terminal rounded"
-                                >
-                                    Sample
-                                </button>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={handleFileUpload}
-                                    accept="*,.pcap,.pcapng"
-                                />
-                                <button
-                                    onClick={() => fileInputRef.current?.click()}
-                                    disabled={isLoading}
-                                    className="px-4 py-2 btn-terminal rounded"
-                                >
-                                    Open File
-                                </button>
-                                <button
-                                    onClick={toggleBuildMode}
-                                    disabled={isLoading || isPcapFile}
-                                    className="px-4 py-2 btn-terminal rounded"
-                                    style={isBuildMode ? { background: '#238636', borderColor: '#2ea043', color: '#fff' } : {}}
-                                    title="Build binary from template"
-                                >
+                                <button onClick={loadSampleFile} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Sample</button>
+                                <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="*,.pcap,.pcapng" />
+                                <button onClick={() => fileInputRef.current?.click()} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Open File</button>
+                                <button onClick={toggleBuildMode} disabled={isLoading || isPcapFile} className="px-4 py-2 btn-terminal rounded" style={isBuildMode ? { background: '#238636', borderColor: '#2ea043', color: '#fff' } : {}} title="Build binary from template">
                                     {isBuildMode ? '🔨 Build Mode' : '🔨 Build'}
                                 </button>
                                 {hasUnsavedChanges && (
                                     <>
-                                        <button
-                                            onClick={handleResetChanges}
-                                            className="px-4 py-2 btn-terminal rounded"
-                                            title="Reset all changes"
-                                        >
-                                            Reset
-                                        </button>
-                                        <button
-                                            onClick={handleSaveFile}
-                                            className="px-4 py-2 btn-terminal rounded"
-                                            title="Save modified file"
-                                        >
-                                            Save File
-                                        </button>
+                                        <button onClick={handleResetChanges} className="px-4 py-2 btn-terminal rounded" title="Reset all changes">Reset</button>
+                                        <button onClick={handleSaveFile} className="px-4 py-2 btn-terminal rounded" title="Save modified file">Save File</button>
                                     </>
                                 )}
-                                <button
-                                    onClick={handleExportSVG}
-                                    disabled={!fileData || parsedFields.length === 0 || isLoading}
-                                    className="px-4 py-2 btn-terminal rounded"
-                                >
-                                    Export SVG
-                                </button>
+                                <button onClick={handleExportSVG} disabled={!fileData || parsedFields.length === 0 || isLoading} className="px-4 py-2 btn-terminal rounded">Export SVG</button>
                             </div>
                         </div>
                         
-                        {/* PCAP Packet Navigation Bar */}
                         {isPcapFile && pcapPackets.length > 0 && (
                             <div className="mb-4 p-3 rounded" style={{ background: '#161b22', border: '1px solid #30363d' }}>
                                 <div className="flex items-center justify-between mb-2">
@@ -3196,53 +3113,16 @@ format_struct = Struct(
                                 </div>
                                 <div className="flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-2">
-                                        <button
-                                            className="px-2 py-1 text-xs rounded btn-terminal"
-                                            onClick={() => handlePacketChange(0)}
-                                            disabled={currentPacketIndex === 0}
-                                        >
-                                            ⏮ First
-                                        </button>
-                                        <button
-                                            className="px-2 py-1 text-xs rounded btn-terminal"
-                                            onClick={() => handlePacketChange(currentPacketIndex - 1)}
-                                            disabled={currentPacketIndex === 0}
-                                        >
-                                            ◀ Prev
-                                        </button>
-                                        <span className="text-sm font-mono px-3" style={{ color: '#58a6ff' }}>
-                                            Packet {currentPacketIndex} / {pcapPackets.length - 1}
-                                        </span>
-                                        <button
-                                            className="px-2 py-1 text-xs rounded btn-terminal"
-                                            onClick={() => handlePacketChange(currentPacketIndex + 1)}
-                                            disabled={currentPacketIndex >= pcapPackets.length - 1}
-                                        >
-                                            Next ▶
-                                        </button>
-                                        <button
-                                            className="px-2 py-1 text-xs rounded btn-terminal"
-                                            onClick={() => handlePacketChange(pcapPackets.length - 1)}
-                                            disabled={currentPacketIndex >= pcapPackets.length - 1}
-                                        >
-                                            Last ⏭
-                                        </button>
+                                        <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(0)} disabled={currentPacketIndex === 0}>⏮ First</button>
+                                        <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(currentPacketIndex - 1)} disabled={currentPacketIndex === 0}>◀ Prev</button>
+                                        <span className="text-sm font-mono px-3" style={{ color: '#58a6ff' }}>Packet {currentPacketIndex} / {pcapPackets.length - 1}</span>
+                                        <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(currentPacketIndex + 1)} disabled={currentPacketIndex >= pcapPackets.length - 1}>Next ▶</button>
+                                        <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(pcapPackets.length - 1)} disabled={currentPacketIndex >= pcapPackets.length - 1}>Last ⏭</button>
                                         <span className="text-xs opacity-50 px-2">|</span>
                                         <span className="text-xs opacity-70">Go to:</span>
-                                        <input
-                                            type="number"
-                                            className="w-20 px-2 py-1 text-xs rounded"
-                                            style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }}
-                                            min="0"
-                                            max={pcapPackets.length - 1}
-                                            value={currentPacketIndex}
-                                            onChange={(e) => handlePacketChange(parseInt(e.target.value) || 0)}
-                                        />
+                                        <input type="number" className="w-20 px-2 py-1 text-xs rounded" style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }} min="0" max={pcapPackets.length - 1} value={currentPacketIndex} onChange={(e) => handlePacketChange(parseInt(e.target.value) || 0)} />
                                     </div>
-                                    <div className="text-xs opacity-70">
-                                        Captured: {pcapPackets[currentPacketIndex].capturedLength}B • 
-                                        Original: {pcapPackets[currentPacketIndex].originalLength}B
-                                    </div>
+                                    <div className="text-xs opacity-70">Captured: {pcapPackets[currentPacketIndex].capturedLength}B • Original: {pcapPackets[currentPacketIndex].originalLength}B</div>
                                 </div>
                             </div>
                         )}
@@ -3263,75 +3143,38 @@ format_struct = Struct(
                                 )}
                             </div>
                             <div className="flex items-center space-x-2">
-                                {isParsing && (
-                                    <span style={{ color: '#f6ad55' }}>
-                                        Parsing...
-                                    </span>
-                                )}
-                                {parseStatus && !isParsing && (
-                                    <span className="opacity-70">{parseStatus}</span>
-                                )}
+                                {isParsing && <span style={{ color: '#f6ad55' }}>Parsing...</span>}
+                                {parseStatus && !isParsing && <span className="opacity-70">{parseStatus}</span>}
                             </div>
                         </div>
                     </header>
 
-                    {/* Main Content */}
                     <div className="flex-1 flex overflow-hidden">
-                        {/* Left Panel - Structure Editor */}
                         <div className="w-1/3 flex flex-col panel" style={{ borderRight: '1px solid #30363d' }}>
                             <div className="terminal-title flex items-center justify-between">
                                 <span>Construct Structure Definition</span>
                                 <div className="flex items-center space-x-2">
-                                    {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>
-                                        {isBuildMode ? 'Building...' : 'Parsing...'}
-                                    </span>}
+                                    {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>{isBuildMode ? 'Building...' : 'Parsing...'}</span>}
                                     {!isBuildMode && (
-                                        <button
-                                            onClick={() => handleParse(false)}  // <--- Manual parse (shows errors)
-                                            disabled={!fileData || !pyodideReady || isParsing}
-                                            className="px-3 py-1 btn-terminal rounded"
-                                            title="Manual parse (shows errors)"
-                                        >
-                                            Parse
-                                        </button>
+                                        <button onClick={() => handleParse(false)} disabled={!fileData || !pyodideReady || isParsing} className="px-3 py-1 btn-terminal rounded" title="Manual parse (shows errors)">Parse</button>
                                     )}
                                 </div>
                             </div>
                             
-                            {/* Template Selector */}
                             <div className="p-2" style={{ borderBottom: '1px solid #30363d', background: '#161b22' }}>
                                 <div className="flex items-center gap-2 mb-2">
                                     <label className="text-xs" style={{ color: '#8b949e' }}>Load Template:</label>
                                     <div className="flex-1 flex items-center gap-1">
-                                        <select
-                                            className="flex-1 px-2 py-1 text-xs rounded"
-                                            style={{ 
-                                                background: '#0d1117', 
-                                                border: '1px solid #30363d', 
-                                                color: '#c9d1d9',
-                                                cursor: 'pointer'
-                                            }}
-                                            onChange={(e) => {
+                                        <select className="flex-1 px-2 py-1 text-xs rounded" style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer' }} onChange={(e) => {
                                                 const templateKey = e.target.value;
-                                                console.log('📋 Template selected:', templateKey);
-                                                
                                                 if (templateKey && CONSTRUCT_LIBRARY[templateKey]) {
                                                     const template = CONSTRUCT_LIBRARY[templateKey];
-                                                    console.log('✅ Loading template:', template.name);
                                                     setStructDef(template.code);
                                                     setParseStatus(`>>> Loaded: ${template.name}`);
-                                                    setError(null); // Clear any previous errors
-                                                    // Reset dropdown to allow re-selection
+                                                    setError(null);
                                                     e.target.value = "";
-                                                } else if (templateKey) {
-                                                    console.error('❌ Template not found in library:', templateKey);
-                                                    console.log('Available templates:', Object.keys(CONSTRUCT_LIBRARY).sort());
-                                                    setParseStatus(`>>> Error: Template "${templateKey}" not found in library`);
-                                                    setError(`Template "${templateKey}" exists in dropdown but not in CONSTRUCT_LIBRARY. This is a bug.`);
                                                 }
-                                            }}
-                                            value=""
-                                        >
+                                            }} value="">
                                             <option value="">-- Select a template --</option>
                                             <optgroup label="📡 Network - Full Stack">
                                                 <option value="full_tcp">Full TCP Packet (Eth+IP+TCP)</option>
@@ -3371,90 +3214,54 @@ format_struct = Struct(
                             </div>
                             
                             <div className="flex-1 flex flex-col">
-                                <CodeEditor
-                                    value={structDef}
-                                    onChange={(e) => setStructDef(e.target.value)}
-                                    placeholder="# Define Construct structure"
-                                    spellCheck={false}
-                                />
+                                <CodeEditor value={structDef} onChange={(e) => setStructDef(e.target.value)} placeholder="# Define Construct structure" spellCheck={false} />
                             </div>
                             
                             {error && (
                                 <div className="m-2 error-box rounded">
                                     <div className="font-semibold mb-1" style={{ fontSize: '12px' }}>⚠️ Parse Error:</div>
-                                    <pre className="whitespace-pre-wrap overflow-auto max-h-32" style={{ fontSize: '11px' }}>
-                                        {error}
-                                    </pre>
-                                    {error.includes('this.') && (
-                                        <div className="mt-2 p-2 rounded" style={{ background: 'rgba(246, 173, 85, 0.1)', border: '1px solid rgba(246, 173, 85, 0.3)' }}>
-                                            <div className="text-xs" style={{ color: '#f6ad55' }}>
-                                                💡 <strong>Hint:</strong> Dynamic fields need <code>.value</code> when wrapped with RawCopy. 
-                                                Use <code>this.field.value</code> instead of <code>this.field</code>.
-                                                <br/>
-                                                Example: <code>Bytes(this.length.value)</code>
-                                            </div>
-                                        </div>
-                                    )}
-                                    {error.includes('not enough bytes') && (
-                                        <div className="mt-2 p-2 rounded" style={{ background: 'rgba(246, 173, 85, 0.1)', border: '1px solid rgba(246, 173, 85, 0.3)' }}>
-                                            <div className="text-xs" style={{ color: '#f6ad55' }}>
-                                                💡 <strong>Hint:</strong> The file is too small for this structure. This template expects more bytes than available.
-                                            </div>
-                                        </div>
-                                    )}
+                                    <pre className="whitespace-pre-wrap overflow-auto max-h-32" style={{ fontSize: '11px' }}>{error}</pre>
                                 </div>
                             )}
                             
                             <div className="flex-1 overflow-hidden flex flex-col" style={{ borderTop: '1px solid #30363d' }}>
-                                <div className="terminal-title">
-                                    {isBuildMode ? '🔨 Build Values' : `Parsed Structure (${parsedFields.length})`}
-                                </div>
+                                <div className="terminal-title">{isBuildMode ? '🔨 Build Values' : `Parsed Structure (${parsedFields.length})`}</div>
                                 <div className={`flex-1 overflow-y-auto scrollbar-thin ${isBuildMode ? '' : 'p-2'}`}>
                                     {isBuildMode ? (
-                                        <BuildForm
-                                            structDef={structDef}
-                                            buildValues={buildValues}
-                                            onValueChange={handleBuildValueChange}
-                                            onBuild={handleBuildFromTemplate}
-                                            isParsing={isParsing}
+                                        <LiveBuilder pyodide={pyodide} structDef={structDef} onBuildComplete={(bytes, fields) => {
+                                                setFileData(bytes);
+                                                setParsedFields(fields);
+                                                const flatten = (nodes, topIdx) => {
+                                                    const list = [];
+                                                    nodes.forEach(n => {
+                                                        list.push({ offset: n.offset, length: n.length, topLevelIndex: topIdx });
+                                                        if (n.children) list.push(...flatten(n.children, topIdx));
+                                                    });
+                                                    return list;
+                                                };
+                                                const ranges = [];
+                                                fields.forEach((f, i) => ranges.push(...flatten([f], i)));
+                                                setHighlightRanges(ranges);
+                                            }}
                                         />
                                     ) : (
-                                        <StructureTree
-                                            fields={parsedFields}
-                                            onFieldSelect={handleFieldSelect}
-                                            selectedField={selectedField}
-                                            onFieldEdit={handleFieldEdit}
-                                            onFieldHover={handleFieldHover}
-                                        />
+                                        <StructureTree fields={parsedFields} onFieldSelect={handleFieldSelect} selectedField={selectedField} onFieldEdit={handleFieldEdit} onFieldHover={handleFieldHover} />
                                     )}
                                 </div>
                             </div>
                         </div>
 
-                        {/* Right Panel - Hex View */}
                         <div className="flex-1 flex flex-col panel">
-                            <div className="terminal-title">
-                                Hex Dump
-                            </div>
-                            
+                            <div className="terminal-title">Hex Dump</div>
                             <div className="flex-1 overflow-hidden scrollbar-thin" style={{ background: '#0d1117' }}>
                                 {fileData ? (
-                                    <HexView
-                                        data={fileData}
-                                        highlightRanges={highlightRanges}
-                                        selectedField={selectedField}
-                                        hoveredField={hoveredField}
-                                    />
+                                    <HexView data={fileData} highlightRanges={highlightRanges} selectedField={selectedField} hoveredField={hoveredField} />
                                 ) : (
                                     <div className="h-full flex items-center justify-center">
                                         <div className="text-center">
                                             <div className="text-6xl mb-4" style={{ opacity: 0.3 }}>📁</div>
-                                            <h3 className="text-xl font-semibold mb-2" style={{ color: '#8b949e' }}>
-                                                No file loaded
-                                            </h3>
-                                            <p style={{ color: '#6e7681', fontSize: '15px' }}>
-                                                Click "Open File" or "Sample" to get started
-                                            </p>
+                                            <h3 className="text-xl font-semibold mb-2" style={{ color: '#8b949e' }}>No file loaded</h3>
+                                            <p style={{ color: '#6e7681', fontSize: '15px' }}>Click "Open File" or "Sample" to get started</p>
                                         </div>
                                     </div>
                                 )}
@@ -3462,7 +3269,6 @@ format_struct = Struct(
                         </div>
                     </div>
 
-                    {/* Footer */}
                     <footer className="terminal-border p-2 text-center" style={{ background: '#161b22', opacity: 0.7, fontSize: '12px' }}>
                         <span>BinTV • Binary Structure Viewer • Powered by Pyodide &amp; Construct</span>
                     </footer>
@@ -3470,10 +3276,8 @@ format_struct = Struct(
             );
         };
 
-        // Render app
         ReactDOM.render(<BinTVApp />, document.getElementById('root'));
 
-        // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'o') {
                 e.preventDefault();
