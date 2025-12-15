@@ -2603,29 +2603,45 @@ format_struct = Struct(
                 });
             };
 
-            const handleParse = async () => {
-                if (!fileData || !pyodideReady) {
-                    console.log('Parse skipped: fileData=', !!fileData, 'pyodideReady=', pyodideReady);
-                    return;
-                }
+            const handleParse = async (isAuto = false) => {
+                if (!fileData || !pyodideReady) return;
                 
-                console.log('Starting parse with', fileData.length, 'bytes');
+                // Only clear previous error if this is a manual parse (or if you want to clear it on typing start)
+                if (!isAuto) setError(null);
+                
+                // Update status only for manual to reduce flicker, or use a subtle message for auto
+                if (!isAuto) setParseStatus('>>> Parsing structure...');
+                
                 setIsParsing(true);
-                setError(null);
-                setParseStatus('>>> Parsing structure...');
                 
                 try {
                     const fields = await parseWithConstruct(fileData, structDef);
-                    console.log('Parse result:', fields);
+                    
+                    // SUCCESS: Always update everything
                     setParsedFields(fields);
                     setHighlightRanges(flattenFields(fields));
                     setParseStatus(`>>> Parse complete: ${fields.length} fields`);
+                    setError(null); // Clear any lingering errors
+                    
                 } catch (err) {
-                    console.error('Parse error:', err);
-                    setError(err.message);
-                    setParsedFields([]);
-                    setHighlightRanges([]);
-                    setParseStatus('>>> Parse error');
+                    console.warn('Parse failed:', err.message);
+                    
+                    if (isAuto) {
+                        // AUTO MODE: Silent fail
+                        // 1. Don't set 'error' (No red box)
+                        // 2. Show subtle status
+                        setParseStatus('>>> ...'); 
+                        
+                        // Optional: You might want to NOT clear the old fields while typing
+                        // so the tree doesn't disappear instantly on a syntax error.
+                        // If you prefer clearing: setParsedFields([]); 
+                    } else {
+                        // MANUAL MODE: Loud fail
+                        setError(err.message); // Shows red box
+                        setParsedFields([]);
+                        setHighlightRanges([]);
+                        setParseStatus('>>> Parse error');
+                    }
                 } finally {
                     setIsParsing(false);
                 }
@@ -2685,24 +2701,34 @@ format_struct = Struct(
             
             // Expose to window for menu callbacks
             useEffect(() => {
-                window.onExportField = handleExportField;
+                if (!fileData || !pyodideReady) return;
                 
-                // Close all export menus when clicking outside
-                const handleClickOutside = (e) => {
-                    if (!e.target.closest('.export-menu') && !e.target.closest('.edit-btn')) {
-                        document.querySelectorAll('.export-menu').forEach(menu => {
-                            menu.style.display = 'none';
-                        });
-                    }
-                };
+                const hasRealContent = structDef.split('\n').some(line => {
+                    const trimmed = line.trim();
+                    return trimmed && !trimmed.startsWith('#');
+                });
                 
-                document.addEventListener('click', handleClickOutside);
+                if (!hasRealContent) return;
+                
+                if (isPcapFile) {
+                    handleParse(true); // <--- Auto-parse
+                    return;
+                }
+                
+                if (parseTimeoutRef.current) {
+                    clearTimeout(parseTimeoutRef.current);
+                }
+                
+                parseTimeoutRef.current = setTimeout(() => {
+                    handleParse(true); // <--- Auto-parse
+                }, 500);
                 
                 return () => {
-                    delete window.onExportField;
-                    document.removeEventListener('click', handleClickOutside);
+                    if (parseTimeoutRef.current) {
+                        clearTimeout(parseTimeoutRef.current);
+                    }
                 };
-            }, [fileData, fileName]);
+            }, [structDef, fileData, pyodideReady, isPcapFile]);
             
             const handleSaveEdit = (offset, newBytes) => {
                 // Create a new array with the edited bytes
@@ -3261,10 +3287,10 @@ format_struct = Struct(
                                     </span>}
                                     {!isBuildMode && (
                                         <button
-                                            onClick={handleParse}
+                                            onClick={() => handleParse(false)}  // <--- Manual parse (shows errors)
                                             disabled={!fileData || !pyodideReady || isParsing}
                                             className="px-3 py-1 btn-terminal rounded"
-                                            title="Manual parse (or auto-parses on edit)"
+                                            title="Manual parse (shows errors)"
                                         >
                                             Parse
                                         </button>
