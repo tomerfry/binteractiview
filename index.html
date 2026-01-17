@@ -979,8 +979,6 @@ format_struct = Struct(
                 name: "AES Encrypted Data",
                 description: "AES-CBC encrypted structure (EncryptedSym)",
                 category: "Examples",
-                // Sample: Key(32) + IV(16) + Encrypted Block(16)
-                sample: "00".repeat(32) + "00".repeat(16) + "00".repeat(16),
                 code: `# AES Encrypted Structure Example
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -996,7 +994,7 @@ format_struct = Struct(
                 "format" / Int32ul,
             )
         ),
-        # FIX: Removed .value
+        # FIX: Removed .value calls. 'ctx.key' is already the bytes object.
         lambda ctx: Cipher(
             algorithms.AES(ctx.key), 
             modes.CBC(ctx.iv),
@@ -1185,36 +1183,64 @@ def instrument_structure(sc, name=""):
 
 # --- 2. Schema Introspection Helpers ---
 # Find def get_type_info(sc): and replace it with this:
+# --- 2. Schema Introspection Helpers ---
 def get_type_info(sc):
-    if isinstance(sc, Renamed): sc = sc.subcon
+    # Unwrap wrappers to find the real type
+    if isinstance(sc, Renamed): return get_type_info(sc.subcon)
+    if isinstance(sc, Subconstruct): return get_type_info(sc.subcon)
+    
+    # Identify types
     if isinstance(sc, FormatField):
         return {"type": "integer", "size": sc.length, "signed": getattr(sc, "signed", False)}
     if isinstance(sc, Bytes):
-        # FIX: Check if size is actually an integer. If it's a Path (this.a), return None.
         size = sc.length if isinstance(sc.length, int) else None
         return {"type": "bytes", "size": size}
     if isinstance(sc, Const):
         val = sc.value
         if isinstance(val, bytes): val = val.hex().upper()
         return {"type": "const", "value": val}
+    if isinstance(sc, Enum):
+        return {"type": "enum", "values": sc.encmapping}
+        
     return {"type": "unknown", "repr": str(type(sc))}
     
 def extract_schema(sc, path=""):
     fields = []
+    
     def walk(subcon, current_path):
+        # 1. Handle Renamed: Update path and recurse
         if isinstance(subcon, Renamed):
             name = subcon.name
-            info = get_type_info(subcon.subcon)
-            if isinstance(subcon.subcon, Struct):
-                for sub in subcon.subcon.subcons:
-                    walk(sub, current_path + [name])
-                return
-            fields.append({ "id": ".".join(current_path + [name]), "name": name, "path": current_path, "info": info })
+            walk(subcon.subcon, current_path + [name])
             return
+
+        # 2. Handle Struct: Iterate children
         if isinstance(subcon, Struct):
             for sub in subcon.subcons:
                 walk(sub, current_path)
             return
+            
+        # 3. Handle Array: (Optional) You can decide to recurse or treat as leaf
+        # For now, let's treat dynamic arrays as leaves to avoid infinite recursion
+        if isinstance(subcon, Array):
+            pass 
+
+        # 4. Handle Wrappers (EncryptedSym, Aligned, Default, etc.)
+        # Crucial: If it is a Subconstruct but NOT Renamed, we just tunnel through.
+        if isinstance(subcon, Subconstruct):
+            walk(subcon.subcon, current_path)
+            return
+
+        # 5. Leaf Nodes: Add to fields list if they have a path
+        if current_path:
+            info = get_type_info(subcon)
+            fields.append({ 
+                "id": ".".join(current_path), 
+                "name": current_path[-1], 
+                "path": current_path, 
+                "info": info 
+            })
+            
     walk(sc, [])
     return fields
 
