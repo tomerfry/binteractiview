@@ -1250,11 +1250,17 @@ def build_and_parse_live(values_json):
             # Handle hex strings for bytes fields
             if isinstance(value, str):
                 clean = value.replace(' ', '').replace('0x', '')
-                if all(c in '0123456789ABCDEFabcdef' for c in clean):
-                     if len(clean) % 2 == 0 and len(clean) > 0:
-                         try: 
+                
+                # --- FIX START ---
+                if len(clean) == 0:
+                    final_val = b""  # Explicitly handle empty string as empty bytes
+                elif all(c in '0123456789ABCDEFabcdef' for c in clean):
+                # --- FIX END ---
+                
+                    if len(clean) % 2 == 0 and len(clean) > 0:
+                        try: 
                             final_val = bytes.fromhex(clean)
-                         except: pass
+                        except: pass
 
             curr[path[-1]] = final_val
 
@@ -1609,7 +1615,9 @@ output_json
                             const defaults = {};
                             data.schema.forEach(f => {
                                 if (f.info.type === 'const') return;
-                                defaults[f.id] = f.info.type === 'bytes' ? '00'.repeat(f.info.size || 1) : 0;
+                                // FIX: Change (f.info.size || 1) to (f.info.size || 0)
+                                // This ensures dynamic fields start empty (matching the default 0 length integers)
+                                defaults[f.id] = f.info.type === 'bytes' ? '00'.repeat(f.info.size || 0) : 0;
                             });
                             setValues(defaults);
                         }
@@ -2472,6 +2480,7 @@ const StructureTree = ({ fields, onFieldSelect, selectedField, onFieldEdit, onFi
                 return svg;
             };
             
+            // FIX: Added 'fileName' as the 3rd argument so it can be passed from the component
             const generateFragmentedZip = async (data, fields, fileName) => {
                 if (typeof JSZip === 'undefined') return alert("JSZip library not found.");
                 const zip = new JSZip();
@@ -2871,38 +2880,6 @@ format_struct = Struct(
                         downloadBlob(svgString, `${fileName}_neon_hud.svg`, 'image/svg+xml');
                     }
                     setParseStatus('>>> Export complete');
-                };
-                
-                const downloadBlob = (content, filename, type) => {
-                    const blob = new Blob([content], { type: type });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                };
-                
-                const generateFragmentedZip = async (data, fields) => {
-                    if (typeof JSZip === 'undefined') return alert("JSZip library not found.");
-                    const zip = new JSZip();
-                    const mainFields = fields.map(f => ({ ...f, children: [] })); 
-                    const mainSvg = generateNeonSVG(data, mainFields, fileName, "Overview Map");
-                    zip.file("00_Overview.svg", mainSvg);
-                    
-                    fields.forEach((field, idx) => {
-                        const safeName = field.name.replace(/[^a-z0-9]/gi, '_');
-                        const prefix = (idx + 1).toString().padStart(2, '0');
-                        const fieldData = data.slice(field.offset, field.offset + field.length);
-                        const adjustOffsets = (nodes, subtract) => nodes.map(n => ({...n, offset: n.offset - subtract, children: n.children ? adjustOffsets(n.children, subtract) : []}));
-                        const relativeChildren = adjustOffsets(field.children || [], field.offset);
-                        if (relativeChildren.length > 0) {
-                            const fragSvg = generateNeonSVG(fieldData, relativeChildren, field.name, `Fragment ${prefix}`);
-                            zip.file(`${prefix}_${safeName}.svg`, fragSvg);
-                        }
-                    });
-                    const content = await zip.generateAsync({ type: "blob" });
-                    downloadBlob(content, `${fileName}_Neon_Export.zip`, "application/zip");
                 };
                 
                 // --- RENDER ---
