@@ -1143,12 +1143,23 @@ class InstrumentedWrapper(Subconstruct):
         return str(val)
 
 def instrument_structure(sc, name=""):
-    if isinstance(sc, Renamed): return instrument_structure(sc.subcon, sc.name)
+    if isinstance(sc, Renamed): 
+        return instrument_structure(sc.subcon, sc.name)
+    
     if isinstance(sc, Struct):
         new_subcons = [instrument_structure(sub, sub.name) for sub in sc.subcons]
         return InstrumentedWrapper(Struct(*new_subcons), name or "Struct")
+    
     elif isinstance(sc, Array):
         return InstrumentedWrapper(Array(sc.count, instrument_structure(sc.subcon, "")), name or "Array")
+    
+    # --- NEW: Explicitly handle Pointer to fix the ELF issue ---
+    elif isinstance(sc, Pointer):
+        # We recurse into the subcon so the UI sees the inner structure
+        new_subcon = instrument_structure(sc.subcon, "")
+        return InstrumentedWrapper(Pointer(sc.offset, new_subcon), name or "Pointer")
+    # -----------------------------------------------------------
+
     else:
         field_name = name or getattr(sc, "name", None) or type(sc).__name__
         return InstrumentedWrapper(sc, field_name)
