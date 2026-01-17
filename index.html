@@ -2343,13 +2343,166 @@ const StructureTree = ({ fields, onFieldSelect, selectedField, onFieldEdit, onFi
         );
     };
     
-    // Main App Component
-    const BinTVApp = () => {
-        const [fileData, setFileData] = useState(null);
-        const [originalFileData, setOriginalFileData] = useState(null);
-        const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-        const [fileName, setFileName] = useState('');
-        const [structDef, setStructDef] = useState(`# Define your Construct structure here
+    // --- 🛠️ HELPER FUNCTIONS (Moved Outside Component) 🛠️ ---
+    
+    const downloadBlob = (content, filename, type) => {
+        const blob = new Blob([content], { type: type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+    
+    // --- 🎨 NEON HUD RENDERER 🎨 ---
+    const generateNeonSVG = (data, fields, title, subtitle) => {
+        // Config
+        const CONFIG = {
+            hexX: 40,
+            hexY: 100,
+            treeX: 520, 
+            rowHeight: 22,
+            bytesPerRow: 16,
+            maxRows: 128,
+            colors: ['#00f3ff', '#bc13fe', '#00ff9d', '#ff0055', '#fcee0a', '#4d4dff', '#ff9e00']
+        };
+        
+        // 1. Calculate Dimensions & Flatten Tree
+        const totalRows = Math.ceil(data.length / CONFIG.bytesPerRow);
+        const displayRows = Math.min(totalRows, CONFIG.maxRows);
+        const hexHeight = displayRows * CONFIG.rowHeight;
+        
+        let renderList = [];
+        const flatten = (nodes, depth=0) => {
+            nodes.forEach(node => {
+                renderList.push({ node, depth });
+                if (node.children && node.children.length > 0) flatten(node.children, depth + 1);
+            });
+        };
+        flatten(fields);
+        
+        const treeHeight = renderList.length * 28;
+        const totalHeight = Math.max(hexHeight, treeHeight) + 150;
+        const width = 1100;
+        
+        // 2. SVG Header
+        let svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&amp;display=swap');
+    text { font-family: 'JetBrains Mono', monospace; }
+    .bg { fill: #090a0f; }
+    .hex-byte { font-size: 12px; fill: #404550; }
+    .hex-active { font-weight: bold; filter: url(#textGlow); }
+    .hex-offset { font-size: 10px; fill: #30363d; }
+    .tree-label { font-size: 13px; font-weight: bold; }
+    .tree-val { font-size: 12px; fill: #8b949e; }
+    .tree-meta { font-size: 10px; opacity: 0.6; fill: #8b949e; }
+    .title { font-size: 24px; font-weight: bold; fill: #fff; filter: url(#headerGlow); }
+    .subtitle { font-size: 14px; fill: #00f3ff; opacity: 0.8; }
+</style>
+<filter id="headerGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2" result="blur" /><feComposite in="SourceGraphic" in2="blur" operator="over" /></filter>
+<filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1" result="blur" /><feComposite in="SourceGraphic" in2="blur" operator="over" /></filter>
+<linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" style="stop-color:#090a0f;stop-opacity:0" /><stop offset="50%" style="stop-color:#ffffff;stop-opacity:0.3" /><stop offset="100%" style="stop-color:#090a0f;stop-opacity:0" /></linearGradient>
+</defs>
+<rect width="100%" height="100%" class="bg"/>
+<g transform="translate(40, 50)">
+<text x="0" y="0" class="title">${title}</text>
+<text x="0" y="24" class="subtitle">// ${subtitle} [${data.length} bytes]</text>
+<line x1="0" y1="35" x2="${width-80}" y2="35" stroke="url(#lineGrad)" stroke-width="1"/>
+</g>`;
+        
+        // 3. Render Hex Grid
+        let hexSvg = `<g transform="translate(${CONFIG.hexX}, ${CONFIG.hexY})">`;
+            const byteColors = new Map();
+            fields.forEach((f, i) => {
+                const color = CONFIG.colors[i % CONFIG.colors.length];
+                for(let b = 0; b < f.length; b++) {
+                    const globalIdx = f.offset + b;
+                    if (globalIdx < data.length) byteColors.set(globalIdx, color);
+                }
+            });
+            
+            for (let r = 0; r < displayRows; r++) {
+                const offset = r * CONFIG.bytesPerRow;
+                const y = r * CONFIG.rowHeight;
+                hexSvg += `<text x="-12" y="${y+14}" class="hex-offset" text-anchor="end">${offset.toString(16).padStart(4,'0').toUpperCase()}</text>`;
+                for (let c = 0; c < CONFIG.bytesPerRow; c++) {
+                    const idx = offset + c;
+                    if (idx >= data.length) break;
+                    const byteVal = data[idx].toString(16).padStart(2,'0').toUpperCase();
+                    const color = byteColors.get(idx);
+                    const x = c * 24;
+                    if (color) {
+                        hexSvg += `<rect x="${x-2}" y="${y+2}" width="22" height="16" fill="${color}" fill-opacity="0.1" rx="2"/>`;
+                        hexSvg += `<text x="${x+9}" y="${y+14}" font-family="monospace" font-size="12" fill="${color}" text-anchor="middle" class="hex-active">${byteVal}</text>`;
+                    } else {
+                        hexSvg += `<text x="${x+9}" y="${y+14}" class="hex-byte" text-anchor="middle">${byteVal}</text>`;
+                    }
+                }
+            }
+            if (displayRows < totalRows) hexSvg += `<text x="0" y="${hexHeight + 20}" fill="#505565" font-style="italic">... ${totalRows - displayRows} more rows truncated ...</text>`;
+            hexSvg += `</g>`;
+            
+            // 4. Render Tree
+            let treeSvg = `<g transform="translate(${CONFIG.treeX}, ${CONFIG.hexY})">`;
+                let currentY = 0;
+                renderList.forEach((item) => {
+                    const { node, depth } = item;
+                    const topIndex = fields.findIndex(f => node.offset >= f.offset && (node.offset + node.length) <= (f.offset + f.length));
+                    const color = CONFIG.colors[Math.max(0, topIndex) % CONFIG.colors.length];
+                    const indent = depth * 20;
+                    treeSvg += `<rect x="0" y="${currentY}" width="540" height="24" fill="${color}" fill-opacity="${0.03}" rx="0"/>`;
+                    treeSvg += `<rect x="${indent}" y="${currentY+4}" width="3" height="16" fill="${color}" rx="1"/>`;
+                    if (depth > 0) {
+                        const parentX = (depth - 1) * 20;
+                        treeSvg += `<path d="M ${parentX} ${currentY-10} L ${parentX} ${currentY+12} L ${indent-5} ${currentY+12}" stroke="${color}" stroke-opacity="0.3" fill="none"/>`;
+                    }
+                    treeSvg += `<text x="${indent + 10}" y="${currentY + 16}" class="tree-label" fill="${color}">${node.name}</text>`;
+                    let valStr = String(node.value || '');
+                    if (valStr.length > 35) valStr = valStr.substring(0, 32) + '...';
+                    treeSvg += `<text x="300" y="${currentY + 16}" class="tree-val">${valStr}</text>`;
+                    treeSvg += `<text x="530" y="${currentY + 16}" class="tree-meta" text-anchor="end">@0x${node.offset.toString(16).toUpperCase()}</text>`;
+                    currentY += 28;
+                });
+                treeSvg += `</g>`;
+                svg += hexSvg + treeSvg + `</svg>`;
+                return svg;
+            };
+            
+            const generateFragmentedZip = async (data, fields, fileName) => {
+                if (typeof JSZip === 'undefined') return alert("JSZip library not found.");
+                const zip = new JSZip();
+                const mainFields = fields.map(f => ({ ...f, children: [] })); 
+                const mainSvg = generateNeonSVG(data, mainFields, fileName, "Overview Map");
+                zip.file("00_Overview.svg", mainSvg);
+                
+                fields.forEach((field, idx) => {
+                    const safeName = field.name.replace(/[^a-z0-9]/gi, '_');
+                    const prefix = (idx + 1).toString().padStart(2, '0');
+                    const fieldData = data.slice(field.offset, field.offset + field.length);
+                    const adjustOffsets = (nodes, subtract) => nodes.map(n => ({...n, offset: n.offset - subtract, children: n.children ? adjustOffsets(n.children, subtract) : []}));
+                    const relativeChildren = adjustOffsets(field.children || [], field.offset);
+                    if (relativeChildren.length > 0) {
+                        const fragSvg = generateNeonSVG(fieldData, relativeChildren, field.name, `Fragment ${prefix}`);
+                        zip.file(`${prefix}_${safeName}.svg`, fragSvg);
+                    }
+                });
+                const content = await zip.generateAsync({ type: "blob" });
+                downloadBlob(content, `${fileName}_Neon_Export.zip`, "application/zip");
+            };
+            
+            // Main App Component
+            const BinTVApp = () => {
+                const [viewMode, setViewMode] = useState('hex'); // Options: 'hex', 'svg'
+                const [liveSvg, setLiveSvg] = useState(null);
+                const [fileData, setFileData] = useState(null);
+                const [originalFileData, setOriginalFileData] = useState(null);
+                const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+                const [fileName, setFileName] = useState('');
+                const [structDef, setStructDef] = useState(`# Define your Construct structure here
 # Example:
 format_struct = Struct(
     "magic" / Bytes(4),
@@ -2358,703 +2511,315 @@ format_struct = Struct(
     "data" / Bytes(8),
     "checksum" / Int32ul,
 )`);
-        const [parsedFields, setParsedFields] = useState([]);
-        const [selectedField, setSelectedField] = useState(null);
-        const [hoveredField, setHoveredField] = useState(null);
-        const [highlightRanges, setHighlightRanges] = useState([]);
-        const [isLoading, setIsLoading] = useState(true);
-        const [isParsing, setIsParsing] = useState(false);
-        const [error, setError] = useState(null);
-        const [parseStatus, setParseStatus] = useState('');
-        const [editingField, setEditingField] = useState(null);
-        
-        // Build mode state
-        const [isBuildMode, setIsBuildMode] = useState(false);
-        const [buildValues, setBuildValues] = useState({});
-        
-        // PCAP-specific state
-        const [isPcapFile, setIsPcapFile] = useState(false);
-        const [pcapPackets, setPcapPackets] = useState([]);
-        const [currentPacketIndex, setCurrentPacketIndex] = useState(0);
-        const [originalPcapData, setOriginalPcapData] = useState(null);
-        
-        const fileInputRef = useRef(null);
-        const parseTimeoutRef = useRef(null);
-        
-        useEffect(() => {
-            initPyodide().then(() => {
-                setIsLoading(false);
-                setParseStatus('>>> Python environment ready');
+                const [parsedFields, setParsedFields] = useState([]);
+                const [selectedField, setSelectedField] = useState(null);
+                const [hoveredField, setHoveredField] = useState(null);
+                const [highlightRanges, setHighlightRanges] = useState([]);
+                const [isLoading, setIsLoading] = useState(true);
+                const [isParsing, setIsParsing] = useState(false);
+                const [error, setError] = useState(null);
+                const [parseStatus, setParseStatus] = useState('');
+                const [editingField, setEditingField] = useState(null);
                 
-                // Check URL parameters for template
-                const urlParams = new URLSearchParams(window.location.search);
-                const template = urlParams.get('template');
-                if (template && CONSTRUCT_LIBRARY[template]) {
-                    setStructDef(CONSTRUCT_LIBRARY[template].code);
-                    setParseStatus(`>>> Loaded template: ${CONSTRUCT_LIBRARY[template].name}`);
-                }
-            }).catch(err => {
-                setError('Failed to initialize Pyodide: ' + err.message);
-                setIsLoading(false);
-            });
-        }, []);
-        
-        // Reactive parsing with debounce
-        useEffect(() => {
-            if (!fileData || !pyodideReady) return;
-            
-            // Check if structDef has actual content (not just comments)
-            const hasRealContent = structDef.split('\n').some(line => {
-                const trimmed = line.trim();
-                return trimmed && !trimmed.startsWith('#');
-            });
-            
-            if (!hasRealContent) return;
-            
-            // For PCAP files, parse immediately when packet changes (no debounce)
-            if (isPcapFile) {
-                handleParse();
-                return;
-            }
-            
-            // For regular files, use debounced parsing
-            // Clear previous timeout
-            if (parseTimeoutRef.current) {
-                clearTimeout(parseTimeoutRef.current);
-            }
-            
-            // Set new timeout for debounced parsing
-            parseTimeoutRef.current = setTimeout(() => {
-                handleParse();
-            }, 500); // Parse 500ms after user stops typing
-            
-            return () => {
-                if (parseTimeoutRef.current) {
-                    clearTimeout(parseTimeoutRef.current);
-                }
-            };
-        }, [structDef, fileData, pyodideReady, isPcapFile]);
-        
-        const handleFileUpload = (event) => {
-            const file = event.target.files[0];
-            if (!file) return;
-            
-            setFileName(file.name);
-            setParseStatus(`>>> Loading file: ${file.name}`);
-            const reader = new FileReader();
-            
-            reader.onload = (e) => {
-                const arrayBuffer = e.target.result;
-                const uint8Array = new Uint8Array(arrayBuffer);
+                // Build mode state
+                const [isBuildMode, setIsBuildMode] = useState(false);
+                const [buildValues, setBuildValues] = useState({});
                 
-                // Check if it's a PCAP file by magic number (more reliable than extension)
-                let isPcap = false;
-                if (uint8Array.length >= 4) {
-                    const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
-                    const magic = view.getUint32(0, true);  // Try little-endian
-                    const magicBE = view.getUint32(0, false); // Try big-endian
-                    
-                    // PCAP: 0xa1b2c3d4 (LE) or 0xd4c3b2a1 (BE)
-                    // PCAPNG: 0x0A0D0D0A
-                    isPcap = (magic === 0xa1b2c3d4 || magicBE === 0xd4c3b2a1 || magic === 0x0A0D0D0A);
-                    
-                    if (!isPcap) {
-                        // Also check file extension as fallback
-                        const fileName = file.name.toLowerCase();
-                        isPcap = fileName.endsWith('.pcap') || fileName.endsWith('.pcapng');
+                // PCAP-specific state
+                const [isPcapFile, setIsPcapFile] = useState(false);
+                const [pcapPackets, setPcapPackets] = useState([]);
+                const [currentPacketIndex, setCurrentPacketIndex] = useState(0);
+                const [originalPcapData, setOriginalPcapData] = useState(null);
+                
+                const fileInputRef = useRef(null);
+                const parseTimeoutRef = useRef(null);
+                
+                // --- EFFECTS ---
+                
+                // 1. Live SVG Generation
+                useEffect(() => {
+                    if (!fileData || parsedFields.length === 0) {
+                        setLiveSvg(null);
+                        return;
                     }
-                }
+                    
+                    const timer = setTimeout(() => {
+                        const svg = generateNeonSVG(fileData, parsedFields, fileName || "Untitled", "Live Preview");
+                        setLiveSvg(svg);
+                    }, 1000);
+                    
+                    return () => clearTimeout(timer);
+                }, [fileData, parsedFields, fileName]);
                 
-                if (isPcap) {
-                    try {
-                        const packets = parsePcap(uint8Array);
-                        setIsPcapFile(true);
-                        setPcapPackets(packets);
-                        setOriginalPcapData(uint8Array);
-                        setCurrentPacketIndex(0);
-                        
-                        // Load first packet
-                        if (packets.length > 0) {
-                            setFileData(packets[0].data);
-                            setOriginalFileData(new Uint8Array(packets[0].data));
-                            setParseStatus(`>>> PCAP loaded: ${packets.length} packets, showing packet 0 (${packets[0].data.length} bytes)`);
-                        } else {
-                            setParseStatus(`>>> PCAP loaded but contains no packets`);
+                // 2. Initialize Pyodide
+                useEffect(() => {
+                    initPyodide().then(() => {
+                        setIsLoading(false);
+                        setParseStatus('>>> Python environment ready');
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const template = urlParams.get('template');
+                        if (template && CONSTRUCT_LIBRARY[template]) {
+                            setStructDef(CONSTRUCT_LIBRARY[template].code);
+                            setParseStatus(`>>> Loaded template: ${CONSTRUCT_LIBRARY[template].name}`);
                         }
-                    } catch (err) {
-                        console.error('PCAP parsing error:', err);
-                        setParseStatus(`>>> PCAP parse error: ${err.message}`);
-                        // Fall back to loading as regular binary
-                        setIsPcapFile(false);
-                        setFileData(uint8Array);
-                        setOriginalFileData(new Uint8Array(uint8Array));
-                    }
-                } else {
-                    // Regular binary file
-                    setIsPcapFile(false);
-                    setPcapPackets([]);
-                    setFileData(uint8Array);
-                    setOriginalFileData(new Uint8Array(uint8Array));
-                    setHasUnsavedChanges(false);
-                    setParseStatus(`>>> File loaded: ${uint8Array.length} bytes`);
-                }
-            };
-            
-            reader.readAsArrayBuffer(file);
-        };
-        
-        // PCAP parsing function
-        const parsePcap = (data) => {
-            const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-            const packets = [];
-            
-            // Check magic number to determine format
-            const magic = view.getUint32(0, true);
-            const magicBE = view.getUint32(0, false);
-            
-            // PCAPNG format: 0x0A0D0D0A
-            if (magic === 0x0A0D0D0A) {
-                console.log('PCAPNG format detected');
-                return parsePcapNG(data, view);
-            }
-            
-            // PCAP format
-            const isLittleEndian = magic === 0xa1b2c3d4;
-            const isBigEndian = magicBE === 0xd4c3b2a1;
-            
-            if (!isLittleEndian && !isBigEndian) {
-                throw new Error('Not a valid PCAP/PCAPNG file (invalid magic number)');
-            }
-            
-            let offset = 24;
-            let packetNum = 0;
-            
-            while (offset + 16 <= data.length) {
-                const ts_sec = view.getUint32(offset, isLittleEndian);
-                const ts_usec = view.getUint32(offset + 4, isLittleEndian);
-                const incl_len = view.getUint32(offset + 8, isLittleEndian);
-                const orig_len = view.getUint32(offset + 12, isLittleEndian);
-                
-                offset += 16;
-                
-                if (offset + incl_len > data.length) break;
-                
-                const packetData = new Uint8Array(data.buffer, data.byteOffset + offset, incl_len);
-                
-                packets.push({
-                    index: packetNum,
-                    timestamp: ts_sec + ts_usec / 1000000,
-                    capturedLength: incl_len,
-                    originalLength: orig_len,
-                    data: packetData,
-                    offset: offset
-                });
-                
-                offset += incl_len;
-                packetNum++;
-            }
-            return packets;
-        };
-        
-        const parsePcapNG = (data, view) => {
-            const packets = [];
-            let offset = 0;
-            let packetNum = 0;
-            
-            while (offset + 12 <= data.length) {
-                const blockType = view.getUint32(offset, true);
-                const blockLen = view.getUint32(offset + 4, true);
-                
-                if (blockLen < 12 || offset + blockLen > data.length) break;
-                
-                if (blockType === 0x00000006) { // Enhanced Packet Block
-                    const capturedLen = view.getUint32(offset + 20, true);
-                    const originalLen = view.getUint32(offset + 24, true);
-                    const dataOffset = offset + 28;
-                    
-                    if (dataOffset + capturedLen <= offset + blockLen) {
-                        const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
-                        packets.push({
-                            index: packetNum,
-                            timestamp: 0, 
-                            capturedLength: capturedLen,
-                            originalLength: originalLen,
-                            data: packetData,
-                            offset: dataOffset
-                        });
-                        packetNum++;
-                    }
-                } else if (blockType === 0x00000003) { // Simple Packet Block
-                    const originalLen = view.getUint32(offset + 8, true);
-                    const capturedLen = Math.min(originalLen, blockLen - 16);
-                    const dataOffset = offset + 12;
-                    
-                    if (dataOffset + capturedLen <= offset + blockLen) {
-                        const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
-                        packets.push({
-                            index: packetNum,
-                            timestamp: 0,
-                            capturedLength: capturedLen,
-                            originalLength: originalLen,
-                            data: packetData,
-                            offset: dataOffset
-                        });
-                        packetNum++;
-                    }
-                }
-                offset += blockLen;
-            }
-            return packets;
-        };
-        
-        const handlePacketChange = (newIndex) => {
-            if (!isPcapFile || newIndex < 0 || newIndex >= pcapPackets.length) return;
-            
-            const packet = pcapPackets[newIndex];
-            setCurrentPacketIndex(newIndex);
-            setFileData(packet.data);
-            setOriginalFileData(new Uint8Array(packet.data));
-            setHasUnsavedChanges(false);
-            setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
-        };
-        
-        const flattenFields = (fields, list = []) => {
-            fields.forEach((field, topLevelIndex) => {
-                list.push({
-                    offset: field.offset,
-                    length: field.length,
-                    topLevelIndex: topLevelIndex,
-                    name: field.name,
-                    value: field.value
-                });
-                if (field.children) {
-                    flattenFieldsNested(field.children, list, topLevelIndex, field.name);
-                }
-            });
-            return list;
-        };
-        
-        const flattenFieldsNested = (fields, list, topLevelIndex, parentName) => {
-            fields.forEach(field => {
-                list.push({
-                    offset: field.offset,
-                    length: field.length,
-                    topLevelIndex: topLevelIndex,
-                    name: parentName + '.' + field.name,
-                    value: field.value
-                });
-                if (field.children) {
-                    flattenFieldsNested(field.children, list, topLevelIndex, parentName + '.' + field.name);
-                }
-            });
-        };
-        
-        const handleParse = async (isAuto = false) => {
-            if (!fileData || !pyodideReady) return;
-            
-            if (!isAuto) setError(null);
-            if (!isAuto) setParseStatus('>>> Parsing structure...');
-            
-            setIsParsing(true);
-            
-            try {
-                const fields = await parseWithConstruct(fileData, structDef);
-                setParsedFields(fields);
-                setHighlightRanges(flattenFields(fields));
-                setParseStatus(`>>> Parse complete: ${fields.length} fields`);
-                setError(null);
-                
-            } catch (err) {
-                console.warn('Parse failed:', err.message);
-                if (isAuto) {
-                    setParseStatus('>>> ...'); 
-                } else {
-                    setError(err.message);
-                    setParsedFields([]);
-                    setHighlightRanges([]);
-                    setParseStatus('>>> Parse error');
-                }
-            } finally {
-                setIsParsing(false);
-            }
-        };
-        
-        const handleFieldSelect = (field) => { setSelectedField(field); };
-        const handleFieldHover = (field) => { setHoveredField(field); };
-        const handleFieldEdit = (field) => { setEditingField(field); };
-        
-        // Expose to window for menu callbacks
-        useEffect(() => {
-            window.onExportField = (field, format) => {
-                if (!fileData || !field || field.length === 0) return;
-                const fieldBytes = fileData.slice(field.offset, field.offset + field.length);
-                
-                if (format === 'python') {
-                    const hexBytes = Array.from(fieldBytes)
-                    .map(b => '\\x' + b.toString(16).padStart(2, '0'))
-                    .join('');
-                    const pythonCode = `b"${hexBytes}"`;
-                    navigator.clipboard.writeText(pythonCode).then(() => {
-                        setParseStatus(`>>> Copied ${field.name} as Python bytes`);
+                    }).catch(err => {
+                        setError('Failed to initialize Pyodide: ' + err.message);
+                        setIsLoading(false);
                     });
-                } else if (format === 'file') {
-                    const blob = new Blob([fieldBytes], { type: 'application/octet-stream' });
+                }, []);
+                
+                // 3. Reactive parsing with debounce
+                useEffect(() => {
+                    if (!fileData || !pyodideReady) return;
+                    
+                    const hasRealContent = structDef.split('\n').some(line => {
+                        const trimmed = line.trim();
+                        return trimmed && !trimmed.startsWith('#');
+                    });
+                    
+                    if (!hasRealContent) return;
+                    
+                    if (isPcapFile) {
+                        handleParse();
+                        return;
+                    }
+                    
+                    if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
+                    
+                    parseTimeoutRef.current = setTimeout(() => {
+                        handleParse();
+                    }, 500);
+                    
+                    return () => {
+                        if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
+                    };
+                }, [structDef, fileData, pyodideReady, isPcapFile]);
+                
+                // --- HANDLERS ---
+                
+                const handleFileUpload = (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    setFileName(file.name);
+                    setParseStatus(`>>> Loading file: ${file.name}`);
+                    const reader = new FileReader();
+                    
+                    reader.onload = (e) => {
+                        const arrayBuffer = e.target.result;
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        
+                        let isPcap = false;
+                        if (uint8Array.length >= 4) {
+                            const view = new DataView(uint8Array.buffer, uint8Array.byteOffset, uint8Array.byteLength);
+                            const magic = view.getUint32(0, true);
+                            const magicBE = view.getUint32(0, false);
+                            isPcap = (magic === 0xa1b2c3d4 || magicBE === 0xd4c3b2a1 || magic === 0x0A0D0D0A);
+                            if (!isPcap) {
+                                const fName = file.name.toLowerCase();
+                                isPcap = fName.endsWith('.pcap') || fName.endsWith('.pcapng');
+                            }
+                        }
+                        
+                        if (isPcap) {
+                            try {
+                                const packets = parsePcap(uint8Array);
+                                setIsPcapFile(true);
+                                setPcapPackets(packets);
+                                setOriginalPcapData(uint8Array);
+                                setCurrentPacketIndex(0);
+                                if (packets.length > 0) {
+                                    setFileData(packets[0].data);
+                                    setOriginalFileData(new Uint8Array(packets[0].data));
+                                    setParseStatus(`>>> PCAP loaded: ${packets.length} packets, showing packet 0`);
+                                } else {
+                                    setParseStatus(`>>> PCAP loaded but contains no packets`);
+                                }
+                            } catch (err) {
+                                console.error('PCAP parsing error:', err);
+                                setParseStatus(`>>> PCAP parse error: ${err.message}`);
+                                setIsPcapFile(false);
+                                setFileData(uint8Array);
+                                setOriginalFileData(new Uint8Array(uint8Array));
+                            }
+                        } else {
+                            setIsPcapFile(false);
+                            setPcapPackets([]);
+                            setFileData(uint8Array);
+                            setOriginalFileData(new Uint8Array(uint8Array));
+                            setHasUnsavedChanges(false);
+                            setParseStatus(`>>> File loaded: ${uint8Array.length} bytes`);
+                        }
+                    };
+                    reader.readAsArrayBuffer(file);
+                };
+                
+                const parsePcap = (data) => {
+                    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+                    const packets = [];
+                    const magic = view.getUint32(0, true);
+                    const magicBE = view.getUint32(0, false);
+                    
+                    if (magic === 0x0A0D0D0A) return parsePcapNG(data, view);
+                    
+                    const isLittleEndian = magic === 0xa1b2c3d4;
+                    if (!isLittleEndian && magicBE !== 0xd4c3b2a1) throw new Error('Invalid PCAP');
+                    
+                    let offset = 24;
+                    let packetNum = 0;
+                    while (offset + 16 <= data.length) {
+                        const incl_len = view.getUint32(offset + 8, isLittleEndian);
+                        const orig_len = view.getUint32(offset + 12, isLittleEndian);
+                        offset += 16;
+                        if (offset + incl_len > data.length) break;
+                        const packetData = new Uint8Array(data.buffer, data.byteOffset + offset, incl_len);
+                        packets.push({ index: packetNum, capturedLength: incl_len, originalLength: orig_len, data: packetData });
+                        offset += incl_len;
+                        packetNum++;
+                    }
+                    return packets;
+                };
+                
+                const parsePcapNG = (data, view) => {
+                    const packets = [];
+                    let offset = 0;
+                    let packetNum = 0;
+                    while (offset + 12 <= data.length) {
+                        const blockType = view.getUint32(offset, true);
+                        const blockLen = view.getUint32(offset + 4, true);
+                        if (blockLen < 12 || offset + blockLen > data.length) break;
+                        
+                        if (blockType === 0x00000006) {
+                            const capturedLen = view.getUint32(offset + 20, true);
+                            const dataOffset = offset + 28;
+                            if (dataOffset + capturedLen <= offset + blockLen) {
+                                const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
+                                packets.push({ index: packetNum, capturedLength: capturedLen, data: packetData });
+                                packetNum++;
+                            }
+                        } else if (blockType === 0x00000003) {
+                            const originalLen = view.getUint32(offset + 8, true);
+                            const capturedLen = Math.min(originalLen, blockLen - 16);
+                            const dataOffset = offset + 12;
+                            if (dataOffset + capturedLen <= offset + blockLen) {
+                                const packetData = new Uint8Array(data.buffer, data.byteOffset + dataOffset, capturedLen);
+                                packets.push({ index: packetNum, capturedLength: capturedLen, data: packetData });
+                                packetNum++;
+                            }
+                        }
+                        offset += blockLen;
+                    }
+                    return packets;
+                };
+                
+                const handlePacketChange = (newIndex) => {
+                    if (!isPcapFile || newIndex < 0 || newIndex >= pcapPackets.length) return;
+                    const packet = pcapPackets[newIndex];
+                    setCurrentPacketIndex(newIndex);
+                    setFileData(packet.data);
+                    setOriginalFileData(new Uint8Array(packet.data));
+                    setHasUnsavedChanges(false);
+                    setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
+                };
+                
+                const flattenFields = (fields, list = []) => {
+                    fields.forEach((field, topLevelIndex) => {
+                        list.push({ offset: field.offset, length: field.length, topLevelIndex: topLevelIndex, name: field.name, value: field.value });
+                        if (field.children) flattenFieldsNested(field.children, list, topLevelIndex, field.name);
+                    });
+                    return list;
+                };
+                
+                const flattenFieldsNested = (fields, list, topLevelIndex, parentName) => {
+                    fields.forEach(field => {
+                        list.push({ offset: field.offset, length: field.length, topLevelIndex: topLevelIndex, name: parentName + '.' + field.name, value: field.value });
+                        if (field.children) flattenFieldsNested(field.children, list, topLevelIndex, parentName + '.' + field.name);
+                    });
+                };
+                
+                const handleParse = async (isAuto = false) => {
+                    if (!fileData || !pyodideReady) return;
+                    if (!isAuto) setError(null);
+                    if (!isAuto) setParseStatus('>>> Parsing structure...');
+                    setIsParsing(true);
+                    try {
+                        const fields = await parseWithConstruct(fileData, structDef);
+                        setParsedFields(fields);
+                        setHighlightRanges(flattenFields(fields));
+                        setParseStatus(`>>> Parse complete: ${fields.length} fields`);
+                        setError(null);
+                    } catch (err) {
+                        console.warn('Parse failed:', err.message);
+                        if (!isAuto) {
+                            setError(err.message);
+                            setParsedFields([]);
+                            setHighlightRanges([]);
+                            setParseStatus('>>> Parse error');
+                        }
+                    } finally {
+                        setIsParsing(false);
+                    }
+                };
+                
+                const handleFieldSelect = (field) => { setSelectedField(field); };
+                const handleFieldHover = (field) => { setHoveredField(field); };
+                const handleFieldEdit = (field) => { setEditingField(field); };
+                
+                // Menu Export Hook
+                useEffect(() => {
+                    window.onExportField = (field, format) => {
+                        if (!fileData || !field || field.length === 0) return;
+                        const fieldBytes = fileData.slice(field.offset, field.offset + field.length);
+                        if (format === 'python') {
+                            const hexBytes = Array.from(fieldBytes).map(b => '\\x' + b.toString(16).padStart(2, '0')).join('');
+                            navigator.clipboard.writeText(`b"${hexBytes}"`).then(() => setParseStatus(`>>> Copied ${field.name} bytes`));
+                        } else if (format === 'file') {
+                            const blob = new Blob([fieldBytes], { type: 'application/octet-stream' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `${fileName}_${field.name}.bin`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            setParseStatus(`>>> Exported ${field.name} to file`);
+                        }
+                    };
+                }, [fileData, fileName]);
+                
+                const handleSaveEdit = (offset, newBytes) => {
+                    const newData = new Uint8Array(fileData);
+                    newData.set(newBytes, offset);
+                    setFileData(newData);
+                    setHasUnsavedChanges(true);
+                    setParseStatus(`>>> Field edited at 0x${offset.toString(16)}`);
+                    setTimeout(() => handleParse(), 100);
+                };
+                
+                const handleSaveFile = () => {
+                    if (!fileData) return;
+                    const blob = new Blob([fileData], { type: 'application/octet-stream' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    const safeFieldName = field.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-                    a.download = `${fileName}_${safeFieldName}.bin`;
+                    a.download = fileName.replace(/(\.[^.]+)?$/, '_modified$1');
                     a.click();
                     URL.revokeObjectURL(url);
-                    setParseStatus(`>>> Exported ${field.name} to file`);
-                }
-            };
-        }, [fileData, fileName]);
-        
-        useEffect(() => {
-            if (!fileData || !pyodideReady) return;
-            
-            const hasRealContent = structDef.split('\n').some(line => {
-                const trimmed = line.trim();
-                return trimmed && !trimmed.startsWith('#');
-            });
-            
-            if (!hasRealContent) return;
-            
-            if (isPcapFile) {
-                handleParse(true);
-                return;
-            }
-            
-            if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
-            
-            parseTimeoutRef.current = setTimeout(() => {
-                handleParse(true);
-            }, 500);
-            
-            return () => {
-                if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
-            };
-        }, [structDef, fileData, pyodideReady, isPcapFile]);
-        
-        const handleSaveEdit = (offset, newBytes) => {
-            const newData = new Uint8Array(fileData);
-            newData.set(newBytes, offset);
-            setFileData(newData);
-            setHasUnsavedChanges(true);
-            setParseStatus(`>>> Field edited at 0x${offset.toString(16)}`);
-            setTimeout(() => handleParse(), 100);
-        };
-        
-        const handleSaveFile = () => {
-            if (!fileData) return;
-            const blob = new Blob([fileData], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName.replace(/(\.[^.]+)?$/, '_modified$1');
-            a.click();
-            URL.revokeObjectURL(url);
-            setHasUnsavedChanges(false);
-            setOriginalFileData(new Uint8Array(fileData));
-            setParseStatus('>>> File saved');
-        };
-        
-        const handleResetChanges = () => {
-            if (originalFileData) {
-                setFileData(new Uint8Array(originalFileData));
-                setHasUnsavedChanges(false);
-                setParseStatus('>>> Changes reset');
-                setTimeout(() => handleParse(), 100);
-            }
-        };
-        
-        const toggleBuildMode = () => {
-            const newMode = !isBuildMode;
-            setIsBuildMode(newMode);
-            if (newMode) {
-                setParseStatus('>>> 🔨 Build Mode: Create binary from template');
-                setBuildValues({});
-            } else {
-                setParseStatus('>>> Parse Mode');
-            }
-        };
-        
-        // --- 🌟 NEON HUD EXPORT ENGINE (No Lines) 🌟 ---
-        
-        const handleExportSVG = async () => {
-            if (!fileData || parsedFields.length === 0) {
-                alert('Please load a file and parse it first!');
-                return;
-            }
-            
-            if (typeof JSZip === 'undefined') {
-                const loadLib = confirm("This feature requires JSZip. Load it from CDN now?");
-                if (loadLib) {
-                    await new Promise((resolve) => {
-                        const script = document.createElement('script');
-                        script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-                        script.onload = resolve;
-                        document.head.appendChild(script);
-                    });
-                } else return;
-            }
-            
-            const shouldFragment = confirm("📦 Export Mode:\n\nOK = Fragment large nested structures into a ZIP (Best for complex files)\nCancel = Single SVG Overview (Best for small headers)");
-            
-            setParseStatus('>>> Generating Neon Export...');
-            
-            if (shouldFragment) {
-                await generateFragmentedZip(fileData, parsedFields);
-            } else {
-                const svgString = generateNeonSVG(fileData, parsedFields, fileName, "Master View");
-                downloadBlob(svgString, `${fileName}_neon_hud.svg`, 'image/svg+xml');
-            }
-            
-            setParseStatus('>>> Export complete');
-        };
-        
-        const downloadBlob = (content, filename, type) => {
-            const blob = new Blob([content], { type: type });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-        };
-        
-        const generateFragmentedZip = async (data, fields) => {
-            const zip = new JSZip();
-            
-            // 1. Master Overview
-            const mainFields = fields.map(f => ({ ...f, children: [] })); 
-            const mainSvg = generateNeonSVG(data, mainFields, fileName, "Overview Map");
-            zip.file("00_Overview.svg", mainSvg);
-            
-            // 2. Fragment Children
-            fields.forEach((field, idx) => {
-                const safeName = field.name.replace(/[^a-z0-9]/gi, '_');
-                const prefix = (idx + 1).toString().padStart(2, '0');
-                const fieldData = data.slice(field.offset, field.offset + field.length);
-                
-                const adjustOffsets = (nodes, subtract) => {
-                    return nodes.map(n => ({
-                        ...n,
-                        offset: n.offset - subtract,
-                        children: n.children ? adjustOffsets(n.children, subtract) : []
-                    }));
+                    setHasUnsavedChanges(false);
+                    setOriginalFileData(new Uint8Array(fileData));
+                    setParseStatus('>>> File saved');
                 };
                 
-                const relativeChildren = adjustOffsets(field.children || [], field.offset);
-                
-                if (relativeChildren.length > 0) {
-                    const fragSvg = generateNeonSVG(fieldData, relativeChildren, field.name, `Fragment ${prefix}`);
-                    zip.file(`${prefix}_${safeName}.svg`, fragSvg);
-                }
-            });
-            
-            const content = await zip.generateAsync({ type: "blob" });
-            downloadBlob(content, `${fileName}_Neon_Export.zip`, "application/zip");
-        };
-        
-        // --- 🎨 NEON HUD RENDERER (Color-Mapped) 🎨 ---
-        const generateNeonSVG = (data, fields, title, subtitle) => {
-            // Config
-            const CONFIG = {
-                hexX: 40,
-                hexY: 100,
-                treeX: 520, // Moved right slightly for separation
-                rowHeight: 22,
-                bytesPerRow: 16,
-                maxRows: 128,
-                colors: [
-                '#00f3ff', // Cyan
-                '#bc13fe', // Neon Purple
-                '#00ff9d', // Matrix Green
-                '#ff0055', // Cyber Red
-                '#fcee0a', // Electric Yellow
-                '#4d4dff', // Deep Blue
-                '#ff9e00'  // Orange
-                ]
-            };
-            
-            // 1. Calculate Dimensions & Flatten Tree
-            const totalRows = Math.ceil(data.length / CONFIG.bytesPerRow);
-            const displayRows = Math.min(totalRows, CONFIG.maxRows);
-            const hexHeight = displayRows * CONFIG.rowHeight;
-            
-            let renderList = [];
-            const flatten = (nodes, depth=0) => {
-                nodes.forEach(node => {
-                    renderList.push({ node, depth });
-                    if (node.children && node.children.length > 0) {
-                        flatten(node.children, depth + 1);
+                const handleResetChanges = () => {
+                    if (originalFileData) {
+                        setFileData(new Uint8Array(originalFileData));
+                        setHasUnsavedChanges(false);
+                        setParseStatus('>>> Changes reset');
+                        setTimeout(() => handleParse(), 100);
                     }
-                });
-            };
-            flatten(fields);
-            
-            const treeHeight = renderList.length * 28;
-            const totalHeight = Math.max(hexHeight, treeHeight) + 150;
-            const width = 1100;
-            
-            // 2. SVG Header with Glow Filters
-            let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${width}" height="${totalHeight}" viewBox="0 0 ${width} ${totalHeight}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&amp;display=swap');
-      text { font-family: 'JetBrains Mono', monospace; }
-      .bg { fill: #090a0f; }
-      
-      /* Hex Styles */
-      .hex-byte { font-size: 12px; fill: #404550; } /* Dimmed default */
-      .hex-active { font-weight: bold; filter: url(#textGlow); }
-      .hex-offset { font-size: 10px; fill: #30363d; }
-      
-      /* Tree Styles */
-      .tree-label { font-size: 13px; font-weight: bold; }
-      .tree-val { font-size: 12px; fill: #8b949e; }
-      .tree-meta { font-size: 10px; opacity: 0.6; fill: #8b949e; }
-      
-      /* Headers */
-      .title { font-size: 24px; font-weight: bold; fill: #fff; filter: url(#headerGlow); }
-      .subtitle { font-size: 14px; fill: #00f3ff; opacity: 0.8; }
-    </style>
-    
-    <filter id="headerGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="2" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
-    
-    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="1" result="blur" />
-      <feComposite in="SourceGraphic" in2="blur" operator="over" />
-    </filter>
-    
-    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-       <stop offset="0%" style="stop-color:#090a0f;stop-opacity:0" />
-       <stop offset="50%" style="stop-color:#ffffff;stop-opacity:0.3" />
-       <stop offset="100%" style="stop-color:#090a0f;stop-opacity:0" />
-    </linearGradient>
-  </defs>
-  
-  <rect width="100%" height="100%" class="bg"/>
-  
-  <g transform="translate(40, 50)">
-    <text x="0" y="0" class="title">${title}</text>
-    <text x="0" y="24" class="subtitle">// ${subtitle} [${data.length} bytes]</text>
-    <line x1="0" y1="35" x2="${width-80}" y2="35" stroke="url(#lineGrad)" stroke-width="1"/>
-  </g>
-`;
-            
-            // 3. Render Hex Grid (Left Side)
-            let hexSvg = `<g transform="translate(${CONFIG.hexX}, ${CONFIG.hexY})">`;
-                
-                // Color Mapping Logic:
-                // Map every byte index to a color based on its top-level field parent
-                const byteColors = new Map();
-                fields.forEach((f, i) => {
-                    const color = CONFIG.colors[i % CONFIG.colors.length];
-                    // Map this color to all bytes in this field's range
-                    for(let b = 0; b < f.length; b++) {
-                        const globalIdx = f.offset + b;
-                        if (globalIdx < data.length) {
-                            byteColors.set(globalIdx, color);
-                        }
-                    }
-                });
-                
-                for (let r = 0; r < displayRows; r++) {
-                    const offset = r * CONFIG.bytesPerRow;
-                    const y = r * CONFIG.rowHeight;
-                    
-                    // Row offset label
-                    hexSvg += `<text x="-12" y="${y+14}" class="hex-offset" text-anchor="end">${offset.toString(16).padStart(4,'0').toUpperCase()}</text>`;
-                    
-                    for (let c = 0; c < CONFIG.bytesPerRow; c++) {
-                        const idx = offset + c;
-                        if (idx >= data.length) break;
-                        
-                        const byteVal = data[idx].toString(16).padStart(2,'0').toUpperCase();
-                        const color = byteColors.get(idx);
-                        const x = c * 24; // slightly wider spacing for readability
-                        
-                        if (color) {
-                            // 1. Background Glow Box (Subtle)
-                            hexSvg += `<rect x="${x-2}" y="${y+2}" width="22" height="16" fill="${color}" fill-opacity="0.1" rx="2"/>`;
-                            
-                            // 2. Colored Byte Text (Neon)
-                            hexSvg += `<text x="${x+9}" y="${y+14}" font-family="monospace" font-size="12" fill="${color}" text-anchor="middle" class="hex-active">${byteVal}</text>`;
-                        } else {
-                            // 3. Unmapped Byte (Gray)
-                            hexSvg += `<text x="${x+9}" y="${y+14}" class="hex-byte" text-anchor="middle">${byteVal}</text>`;
-                        }
-                    }
-                }
-                
-                if (displayRows < totalRows) {
-                    hexSvg += `<text x="0" y="${hexHeight + 20}" fill="#505565" font-style="italic">... ${totalRows - displayRows} more rows truncated ...</text>`;
-                }
-                hexSvg += `</g>`;
-                
-                // 4. Render Structure Tree (Right Side)
-                // Now relies on color matching instead of lines
-                let treeSvg = `<g transform="translate(${CONFIG.treeX}, ${CONFIG.hexY})">`;
-                    let currentY = 0;
-                    
-                    renderList.forEach((item) => {
-                        const { node, depth } = item;
-                        
-                        // Determine Color: Find the Top-Level Parent Index
-                        const topIndex = fields.findIndex(f => node.offset >= f.offset && (node.offset + node.length) <= (f.offset + f.length));
-                        const color = CONFIG.colors[Math.max(0, topIndex) % CONFIG.colors.length];
-                        
-                        const indent = depth * 20;
-                        
-                        // Row Background Strip (Very subtle)
-                        treeSvg += `<rect x="0" y="${currentY}" width="540" height="24" fill="${color}" fill-opacity="${0.03}" rx="0"/>`;
-                        
-                        // Color Key Marker (The "Neon Bar" on the left)
-                        // This explicitly links the row to the color in the hex dump
-                        treeSvg += `<rect x="${indent}" y="${currentY+4}" width="3" height="16" fill="${color}" rx="1"/>`;
-                        
-                        // Hierarchy Lines (Dimmed)
-                        if (depth > 0) {
-                            // L-shape connector for nested items
-                            const parentX = (depth - 1) * 20;
-                            treeSvg += `<path d="M ${parentX} ${currentY-10} L ${parentX} ${currentY+12} L ${indent-5} ${currentY+12}" stroke="${color}" stroke-opacity="0.3" fill="none"/>`;
-                        }
-                        
-                        // Field Name (Colored)
-                        treeSvg += `<text x="${indent + 10}" y="${currentY + 16}" class="tree-label" fill="${color}">${node.name}</text>`;
-                        
-                        // Field Value
-                        let valStr = String(node.value || '');
-                        if (valStr.length > 35) valStr = valStr.substring(0, 32) + '...';
-                        treeSvg += `<text x="300" y="${currentY + 16}" class="tree-val">${valStr}</text>`;
-                        
-                        // Meta Info (Offset/Size)
-                        treeSvg += `<text x="530" y="${currentY + 16}" class="tree-meta" text-anchor="end">@0x${node.offset.toString(16).toUpperCase()}</text>`;
-                        
-                        currentY += 28;
-                    });
-                    treeSvg += `</g>`;
-                    
-                    svg += hexSvg;
-                    svg += treeSvg;
-                    svg += `</svg>`;
-                    
-                    return svg;
                 };
                 
                 const loadSampleFile = () => {
-                    const sample = new Uint8Array([
-                    0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 
-                    0x08, 0x00, 0x00, 0x00, 0x48, 0x65, 0x6C, 0x6C, 
-                    0x6F, 0x20, 0x57, 0x6F, 0xDE, 0xAD, 0xBE, 0xEF
-                    ]);
+                    const sample = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x57, 0x6F, 0xDE, 0xAD, 0xBE, 0xEF]);
                     setFileData(sample);
                     setOriginalFileData(new Uint8Array(sample));
                     setHasUnsavedChanges(false);
@@ -3071,13 +2836,83 @@ format_struct = Struct(
 )`);
                 };
                 
+                const toggleBuildMode = () => {
+                    setIsBuildMode(!isBuildMode);
+                    setParseStatus(isBuildMode ? '>>> Parse Mode' : '>>> 🔨 Build Mode');
+                };
+                
+                // Inside BinTVApp component...
+                const handleExportSVG = async () => {
+                    if (!fileData || parsedFields.length === 0) {
+                        alert('Please load a file and parse it first!');
+                        return;
+                    }
+                    
+                    if (typeof JSZip === 'undefined') {
+                        const loadLib = confirm("This feature requires JSZip. Load it from CDN now?");
+                        if (loadLib) {
+                            await new Promise((resolve) => {
+                                const script = document.createElement('script');
+                                script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+                                script.onload = resolve;
+                                document.head.appendChild(script);
+                            });
+                        } else return;
+                    }
+                    
+                    const shouldFragment = confirm("📦 Export Mode:\n\nOK = Fragment large nested structures into a ZIP\nCancel = Single SVG Overview");
+                    setParseStatus('>>> Generating Export...');
+                    
+                    if (shouldFragment) {
+                        // FIX: Pass fileName as the 3rd argument
+                        await generateFragmentedZip(fileData, parsedFields, fileName);
+                    } else {
+                        const svgString = generateNeonSVG(fileData, parsedFields, fileName, "Master View");
+                        downloadBlob(svgString, `${fileName}_neon_hud.svg`, 'image/svg+xml');
+                    }
+                    setParseStatus('>>> Export complete');
+                };
+                
+                const downloadBlob = (content, filename, type) => {
+                    const blob = new Blob([content], { type: type });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                };
+                
+                const generateFragmentedZip = async (data, fields) => {
+                    if (typeof JSZip === 'undefined') return alert("JSZip library not found.");
+                    const zip = new JSZip();
+                    const mainFields = fields.map(f => ({ ...f, children: [] })); 
+                    const mainSvg = generateNeonSVG(data, mainFields, fileName, "Overview Map");
+                    zip.file("00_Overview.svg", mainSvg);
+                    
+                    fields.forEach((field, idx) => {
+                        const safeName = field.name.replace(/[^a-z0-9]/gi, '_');
+                        const prefix = (idx + 1).toString().padStart(2, '0');
+                        const fieldData = data.slice(field.offset, field.offset + field.length);
+                        const adjustOffsets = (nodes, subtract) => nodes.map(n => ({...n, offset: n.offset - subtract, children: n.children ? adjustOffsets(n.children, subtract) : []}));
+                        const relativeChildren = adjustOffsets(field.children || [], field.offset);
+                        if (relativeChildren.length > 0) {
+                            const fragSvg = generateNeonSVG(fieldData, relativeChildren, field.name, `Fragment ${prefix}`);
+                            zip.file(`${prefix}_${safeName}.svg`, fragSvg);
+                        }
+                    });
+                    const content = await zip.generateAsync({ type: "blob" });
+                    downloadBlob(content, `${fileName}_Neon_Export.zip`, "application/zip");
+                };
+                
+                // --- RENDER ---
+                
                 if (isLoading) {
                     return (
                     <div className="h-screen flex items-center justify-center" style={{ background: '#0d1117' }}>
                         <div className="text-center">
                             <div className="loading-spinner mx-auto mb-4"></div>
                             <h2 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>Initializing Python Environment</h2>
-                            <p className="mt-2 text-base" style={{ color: '#8b949e' }}>Loading Pyodide and Construct library...</p>
                         </div>
                     </div>
                     );
@@ -3097,235 +2932,163 @@ format_struct = Struct(
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center space-x-4">
                                     <h1 className="text-2xl font-semibold" style={{ color: '#58a6ff' }}>BinTV</h1>
-                                    <span className="text-sm opacity-70">Binary Structure Viewer v1.0</span>
-                                    {hasUnsavedChanges && (
-                                        <span className="text-sm px-2 py-1 rounded" style={{ background: '#f6ad55', color: '#000' }}>• Modified</span>
-                                        )}
+                                    <span className="text-sm opacity-70">Binary Structure Viewer v1.1</span>
+                                    {hasUnsavedChanges && <span className="text-sm px-2 py-1 rounded bg-yellow-600 text-black">• Modified</span>}
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <button onClick={loadSampleFile} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Sample</button>
+                                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="*,.pcap,.pcapng" />
+                                    <button onClick={() => fileInputRef.current?.click()} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Open File</button>
+                                    <button onClick={toggleBuildMode} disabled={isLoading || isPcapFile} className="px-4 py-2 btn-terminal rounded" style={isBuildMode ? {background:'#238636'} : {}}>
+                                        {isBuildMode ? '🔨 Build Mode' : '🔨 Build'}
+                                    </button>
+                                    {hasUnsavedChanges && <button onClick={handleSaveFile} className="px-4 py-2 btn-terminal rounded">Save</button>}
+                                    <button onClick={handleExportSVG} disabled={!fileData} className="px-4 py-2 btn-terminal rounded">Export SVG</button>
+                                </div>
+                            </div>
+                            <div className="mt-2 text-sm flex justify-between">
+                                <div>
+                                    {fileName && <span className="text-blue-400">File: {fileName} ({fileData?.length} bytes)</span>}
+                                    {isPcapFile && <span className="ml-4 text-green-400">PCAP Mode</span>}
+                                </div>
+                                <span className="opacity-70">{parseStatus}</span>
+                            </div>
+                        </header>
+                        
+                        <div className="flex-1 flex overflow-hidden">
+                            {/* LEFT PANEL */}
+                            <div className="w-1/3 flex flex-col panel" style={{ borderRight: '1px solid #30363d' }}>
+                                <div className="terminal-title flex justify-between">
+                                    <span>Construct Structure</span>
+                                    <button onClick={() => handleParse(false)} className="px-2 py-0.5 btn-terminal text-xs">Parse</button>
+                                </div>
+                                
+                                <div className="p-2 bg-[#161b22] border-b border-[#30363d]">
+                                    <select 
+                                    className="w-full px-2 py-1 text-xs rounded bg-[#0d1117] border border-[#30363d] text-[#c9d1d9]"
+                                    onChange={(e) => {
+                                        const t = CONSTRUCT_LIBRARY[e.target.value];
+                                        if (t) {
+                                            setStructDef(t.code);
+                                            setParseStatus(`>>> Loaded template: ${t.name}`);
+                                            if (t.sample) {
+                                                const hex = t.sample.replace(/[^0-9A-Fa-f]/g, '');
+                                                const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+                                                setFileData(bytes);
+                                                setOriginalFileData(bytes);
+                                                setFileName(`${e.target.value}_sample.bin`);
+                                                setHasUnsavedChanges(false);
+                                                setTimeout(() => handleParse(true), 100);
+                                            }
+                                        }
+                                        e.target.value = "";
+                                    }}
+                                    >
+                                    <option value="">-- Load Template --</option>
+                                    {Object.keys(CONSTRUCT_LIBRARY).map(k => (
+                                        <option key={k} value={k}>{CONSTRUCT_LIBRARY[k].name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                
+                                <div className="flex-1 flex flex-col">
+                                    <CodeEditor value={structDef} onChange={(e) => setStructDef(e.target.value)} placeholder="# Define Struct" />
                                     </div>
                                     
-                                    <div className="flex items-center space-x-2">
-                                        <button onClick={loadSampleFile} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Sample</button>
-                                        <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="*,.pcap,.pcapng" />
-                                        <button onClick={() => fileInputRef.current?.click()} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Open File</button>
-                                        <button onClick={toggleBuildMode} disabled={isLoading || isPcapFile} className="px-4 py-2 btn-terminal rounded" style={isBuildMode ? { background: '#238636', borderColor: '#2ea043', color: '#fff' } : {}} title="Build binary from template">
-                                            {isBuildMode ? '🔨 Build Mode' : '🔨 Build'}
-                                        </button>
-                                        {hasUnsavedChanges && (
-                                            <>
-                                            <button onClick={handleResetChanges} className="px-4 py-2 btn-terminal rounded" title="Reset all changes">Reset</button>
-                                            <button onClick={handleSaveFile} className="px-4 py-2 btn-terminal rounded" title="Save modified file">Save File</button>
-                                            </>
-                                            )}
-                                            <button onClick={handleExportSVG} disabled={!fileData || parsedFields.length === 0 || isLoading} className="px-4 py-2 btn-terminal rounded">Export SVG</button>
-                                        </div>
-                                    </div>
-                                    
-                                    {isPcapFile && pcapPackets.length > 0 && (
-                                        <div className="mb-4 p-3 rounded" style={{ background: '#161b22', border: '1px solid #30363d' }}>
-                                            <div className="flex items-center justify-between mb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-semibold" style={{ color: '#58a6ff' }}>📦 PCAP Mode</span>
-                                                    <span className="text-xs opacity-70">{pcapPackets.length} packets total</span>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div className="flex items-center gap-2">
-                                                    <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(0)} disabled={currentPacketIndex === 0}>⏮ First</button>
-                                                    <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(currentPacketIndex - 1)} disabled={currentPacketIndex === 0}>◀ Prev</button>
-                                                    <span className="text-sm font-mono px-3" style={{ color: '#58a6ff' }}>Packet {currentPacketIndex} / {pcapPackets.length - 1}</span>
-                                                    <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(currentPacketIndex + 1)} disabled={currentPacketIndex >= pcapPackets.length - 1}>Next ▶</button>
-                                                    <button className="px-2 py-1 text-xs rounded btn-terminal" onClick={() => handlePacketChange(pcapPackets.length - 1)} disabled={currentPacketIndex >= pcapPackets.length - 1}>Last ⏭</button>
-                                                    <span className="text-xs opacity-50 px-2">|</span>
-                                                    <span className="text-xs opacity-70">Go to:</span>
-                                                    <input type="number" className="w-20 px-2 py-1 text-xs rounded" style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9' }} min="0" max={pcapPackets.length - 1} value={currentPacketIndex} onChange={(e) => handlePacketChange(parseInt(e.target.value) || 0)} />
-                                                </div>
-                                                <div className="text-xs opacity-70">Captured: {pcapPackets[currentPacketIndex].capturedLength}B • Original: {pcapPackets[currentPacketIndex].originalLength}B</div>
-                                            </div>
+                                    {error && (
+                                        <div className="m-2 error-box">
+                                            <div className="font-bold text-xs">⚠️ Parse Error:</div>
+                                            <pre className="text-[10px]">{error}</pre>
                                         </div>
                                         )}
                                         
-                                        <div className="mt-2 text-sm flex items-center justify-between">
-                                            <div>
-                                                {fileName && (
+                                        <div className="flex-1 overflow-y-auto border-t border-[#30363d]">
+                                            {isBuildMode ? (
+                                                <LiveBuilder pyodide={pyodide} structDef={structDef} onBuildComplete={(b, f) => {
+                                                    setFileData(b); setParsedFields(f); 
+                                                    const flatten = (nodes, topIdx) => {
+                                                        const list = [];
+                                                        nodes.forEach(n => {
+                                                            list.push({ offset: n.offset, length: n.length, topLevelIndex: topIdx });
+                                                            if (n.children) list.push(...flatten(n.children, topIdx));
+                                                        });
+                                                        return list;
+                                                    };
+                                                    const ranges = [];
+                                                    f.forEach((field, i) => ranges.push(...flatten([field], i)));
+                                                    setHighlightRanges(ranges);
+                                                }} />
+                                                ) : (
+                                                <StructureTree fields={parsedFields} onFieldSelect={handleFieldSelect} selectedField={selectedField} onFieldEdit={handleFieldEdit} onFieldHover={handleFieldHover} />
+                                                )}
+                                            </div>
+                                        </div>
+                                        
+                                        {/* RIGHT PANEL (TABBED) */}
+                                        <div className="flex-1 flex flex-col panel">
+                                            <div className="terminal-title flex justify-between items-center pr-2">
+                                                <span>{viewMode === 'hex' ? 'Hex Dump' : 'Neon HUD Preview'}</span>
+                                                <div className="flex bg-[#0d1117] rounded border border-gray-700 p-0.5">
+                                                    <button
+                                                    className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'hex' ? 'bg-[#238636] text-white' : 'text-gray-400'}`}
+                                                    onClick={() => setViewMode('hex')}
+                                                    >Hex</button>
+                                                    <button
+                                                    className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'svg' ? 'bg-[#bc13fe] text-white' : 'text-gray-400'}`}
+                                                    onClick={() => setViewMode('svg')}
+                                                    >Neon HUD</button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="flex-1 overflow-hidden relative" style={{ background: '#0d1117' }}>
+                                                {!fileData ? (
+                                                    <div className="h-full flex items-center justify-center text-gray-500">
+                                                        No file loaded
+                                                    </div>
+                                                    ) : (
                                                     <>
-                                                    <span style={{ color: '#58a6ff' }}>File:</span>
-                                                    <span className="ml-2">{fileName}</span>
-                                                    {fileData && (
-                                                        <span className="ml-4">
-                                                            <span style={{ color: '#58a6ff' }}>Size:</span>
-                                                            <span className="ml-2">{fileData.length} bytes</span>
-                                                        </span>
+                                                    <div style={{ display: viewMode === 'hex' ? 'block' : 'none', height: '100%' }}>
+                                                        <HexView data={fileData} highlightRanges={highlightRanges} selectedField={selectedField} hoveredField={hoveredField} />
+                                                    </div>
+                                                    {viewMode === 'svg' && (
+                                                    <div className="h-full w-full overflow-auto flex justify-center p-8 bg-[#050608]">
+                                                        {liveSvg ? (
+                                                            <div dangerouslySetInnerHTML={{ __html: liveSvg }} />
+                                                            ) : (
+                                                            <div className="text-[#00f3ff] mt-20">Rendering...</div>
+                                                            )}
+                                                        </div>
                                                         )}
                                                         </>
                                                         )}
                                                     </div>
-                                                    <div className="flex items-center space-x-2">
-                                                        {isParsing && <span style={{ color: '#f6ad55' }}>Parsing...</span>}
-                                                        {parseStatus && !isParsing && <span className="opacity-70">{parseStatus}</span>}
-                                                    </div>
                                                 </div>
-                                            </header>
+                                            </div>
                                             
-                                            <div className="flex-1 flex overflow-hidden">
-                                                <div className="w-1/3 flex flex-col panel" style={{ borderRight: '1px solid #30363d' }}>
-                                                    <div className="terminal-title flex items-center justify-between">
-                                                        <span>Construct Structure Definition</span>
-                                                        <div className="flex items-center space-x-2">
-                                                            {isParsing && <span style={{ color: '#f6ad55', fontSize: '12px' }}>{isBuildMode ? 'Building...' : 'Parsing...'}</span>}
-                                                            {!isBuildMode && (
-                                                                <button onClick={() => handleParse(false)} disabled={!fileData || !pyodideReady || isParsing} className="px-3 py-1 btn-terminal rounded" title="Manual parse (shows errors)">Parse</button>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        <div className="p-2" style={{ borderBottom: '1px solid #30363d', background: '#161b22' }}>
-                                                            <div className="flex items-center gap-2 mb-2">
-                                                                <label className="text-xs" style={{ color: '#8b949e' }}>Load Template:</label>
-                                                                <div className="flex-1 flex items-center gap-1">
-                                                                        <select 
-                                                                        className="flex-1 px-2 py-1 text-xs rounded" 
-                                                                        style={{ background: '#0d1117', border: '1px solid #30363d', color: '#c9d1d9', cursor: 'pointer' }} 
-                                                                        onChange={(e) => {
-                                                                            const templateKey = e.target.value;
-                                                                            if (templateKey && CONSTRUCT_LIBRARY[templateKey]) {
-                                                                                const template = CONSTRUCT_LIBRARY[templateKey];
-                                                                                setStructDef(template.code);
-                                                                                setError(null);
-                                                                                
-                                                                                // --- NEW: Load Sample Data ---
-                                                                                if (template.sample) {
-                                                                                    // Convert hex string to Uint8Array
-                                                                                    const hex = template.sample.replace(/[^0-9A-Fa-f]/g, '');
-                                                                                    const pairs = hex.match(/.{1,2}/g) || [];
-                                                                                    const sampleBytes = new Uint8Array(pairs.map(byte => parseInt(byte, 16)));
-                                                                                    
-                                                                                    setFileData(sampleBytes);
-                                                                                    setOriginalFileData(new Uint8Array(sampleBytes));
-                                                                                    setFileName(`${templateKey}_sample.bin`);
-                                                                                    setHasUnsavedChanges(false);
-                                                                                    setParseStatus(`>>> Loaded template & sample: ${template.name}`);
-                                                                                    
-                                                                                    // Trigger auto-parse
-                                                                                    setTimeout(() => handleParse(true), 100);
-                                                                                } else {
-                                                                                    setParseStatus(`>>> Loaded template: ${template.name}`);
-                                                                                }
-                                                                                // -----------------------------
-                                                                                
-                                                                                e.target.value = ""; // Reset select
-                                                                            }
-                                                                        }} 
-                                                                        value=""
-                                                                        >
-                                                                        <option value="">-- Select a template --</option>
-                                                                        <optgroup label="📡 Network - Full Stack">
-                                                                            <option value="full_tcp">Full TCP Packet (Eth+IP+TCP)</option>
-                                                                            <option value="full_udp">Full UDP Packet (Eth+IP+UDP)</option>
-                                                                            <option value="full_dns">Full DNS Packet (Eth+IP+UDP+DNS)</option>
-                                                                            <option value="full_dhcp">Full DHCP Packet (Eth+IP+UDP+DHCP)</option>
-                                                                            <option value="full_arp">Full ARP Packet (Eth+ARP)</option>
-                                                                        </optgroup>
-                                                                        <optgroup label="📁 Files - Executables & Archives">
-                                                                            <option value="elf">ELF Header (64-bit)</option>
-                                                                            <option value="pe">PE Header (Windows)</option>
-                                                                            <option value="zip">ZIP Local File Header</option>
-                                                                            <option value="gzip">GZIP Header</option>
-                                                                            <option value="tar">TAR Header (POSIX)</option>
-                                                                            <option value="png">PNG Chunk</option>
-                                                                            <option value="jpeg">JPEG Segment</option>
-                                                                        </optgroup>
-                                                                        <optgroup label="🔧 Firmware - Filesystems">
-                                                                            <option value="squashfs">SquashFS Superblock</option>
-                                                                            <option value="ext4">EXT2/3/4 Superblock</option>
-                                                                            <option value="cpio">CPIO Archive (newc/initramfs)</option>
-                                                                        </optgroup>
-                                                                        <optgroup label="💡 Examples - Advanced Features">
-                                                                            <option value="aes_encrypted">🔐 AES Encrypted (EncryptedSym)</option>
-                                                                            <option value="compressed_data">🗜️ Compressed (zlib)</option>
-                                                                            <option value="checksummed">✓ Checksummed (SHA256)</option>
-                                                                            <option value="xor_encoded">🔀 XOR Encoded (ProcessXor)</option>
-                                                                            <option value="null_terminated">∅ Null-Terminated String</option>
-                                                                            <option value="prefixed_array">📊 Prefixed Array</option>
-                                                                        </optgroup>
-                                                                    </select>
-                                                                </div>
-                                                            </div>
-                                                            <div className="text-xs px-1" style={{ color: '#6e7681', lineHeight: '1.4' }}>
-                                                                💡 Templates support dynamic fields using <code>this.field.value</code> pattern (e.g., <code>Bytes(this.length.value)</code>)
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        <div className="flex-1 flex flex-col">
-                                                            <CodeEditor value={structDef} onChange={(e) => setStructDef(e.target.value)} placeholder="# Define Construct structure" spellCheck={false} />
-                                                            </div>
-                                                            
-                                                            {error && (
-                                                                <div className="m-2 error-box rounded">
-                                                                    <div className="font-semibold mb-1" style={{ fontSize: '12px' }}>⚠️ Parse Error:</div>
-                                                                    <pre className="whitespace-pre-wrap overflow-auto max-h-32" style={{ fontSize: '11px' }}>{error}</pre>
-                                                                </div>
-                                                                )}
-                                                                
-                                                                <div className="flex-1 overflow-hidden flex flex-col" style={{ borderTop: '1px solid #30363d' }}>
-                                                                    <div className="terminal-title">{isBuildMode ? '🔨 Build Values' : `Parsed Structure (${parsedFields.length})`}</div>
-                                                                    <div className={`flex-1 overflow-y-auto scrollbar-thin ${isBuildMode ? '' : 'p-2'}`}>
-                                                                        {isBuildMode ? (
-                                                                            <LiveBuilder pyodide={pyodide} structDef={structDef} onBuildComplete={(bytes, fields) => {
-                                                                                setFileData(bytes);
-                                                                                setParsedFields(fields);
-                                                                                const flatten = (nodes, topIdx) => {
-                                                                                    const list = [];
-                                                                                    nodes.forEach(n => {
-                                                                                        list.push({ offset: n.offset, length: n.length, topLevelIndex: topIdx });
-                                                                                        if (n.children) list.push(...flatten(n.children, topIdx));
-                                                                                    });
-                                                                                    return list;
-                                                                                };
-                                                                                const ranges = [];
-                                                                                fields.forEach((f, i) => ranges.push(...flatten([f], i)));
-                                                                                setHighlightRanges(ranges);
-                                                                            }}
-                                                                            />
-                                                                            ) : (
-                                                                            <StructureTree fields={parsedFields} onFieldSelect={handleFieldSelect} selectedField={selectedField} onFieldEdit={handleFieldEdit} onFieldHover={handleFieldHover} />
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                                
-                                                                <div className="flex-1 flex flex-col panel">
-                                                                    <div className="terminal-title">Hex Dump</div>
-                                                                    <div className="flex-1 overflow-hidden scrollbar-thin" style={{ background: '#0d1117' }}>
-                                                                        {fileData ? (
-                                                                            <HexView data={fileData} highlightRanges={highlightRanges} selectedField={selectedField} hoveredField={hoveredField} />
-                                                                            ) : (
-                                                                            <div className="h-full flex items-center justify-center">
-                                                                                <div className="text-center">
-                                                                                    <div className="text-6xl mb-4" style={{ opacity: 0.3 }}>📁</div>
-                                                                                    <h3 className="text-xl font-semibold mb-2" style={{ color: '#8b949e' }}>No file loaded</h3>
-                                                                                    <p style={{ color: '#6e7681', fontSize: '15px' }}>Click "Open File" or "Sample" to get started</p>
-                                                                                </div>
-                                                                            </div>
-                                                                            )}
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                                
-                                                                <footer className="terminal-border p-2 text-center" style={{ background: '#161b22', opacity: 0.7, fontSize: '12px' }}>
-                                                                    <span>BinTV • Binary Structure Viewer • Powered by Pyodide &amp; Construct</span>
-                                                                </footer>
-                                                            </div>
-                                                            );
-                                                        };
-                                                        
-                                                        ReactDOM.render(<BinTVApp />, document.getElementById('root'));
-                                                        
-                                                        document.addEventListener('keydown', (e) => {
-                                                            if (e.ctrlKey && e.key === 'o') {
-                                                                e.preventDefault();
-                                                                document.querySelector('input[type="file"]')?.click();
-                                                            }
-                                                        });
-                                                    </script>
-                                                </body>
-                                                </html>
+                                            <footer className="terminal-border p-2 text-center" style={{ background: '#161b22', opacity: 0.7, fontSize: '12px' }}>
+                                                <span>BinTV • Binary Structure Viewer • Powered by Pyodide &amp; Construct</span>
+                                            </footer>
+                                        </div>
+                                        );
+                                    };
+                                    
+                                    ReactDOM.render(<BinTVApp />, document.getElementById('root'));
+                                    
+                                    document.addEventListener('keydown', (e) => {
+                                        if (e.ctrlKey && e.key === 'o') {
+                                            e.preventDefault();
+                                            document.querySelector('input[type="file"]')?.click();
+                                        }
+                                    });
+                                    
+                                    ReactDOM.render(<BinTVApp />, document.getElementById('root'));
+                                    
+                                    document.addEventListener('keydown', (e) => {
+                                        if (e.ctrlKey && e.key === 'o') {
+                                            e.preventDefault();
+                                            document.querySelector('input[type="file"]')?.click();
+                                        }
+                                    });
+                                </script>
+                            </body>
+                            </html>
