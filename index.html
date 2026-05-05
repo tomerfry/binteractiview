@@ -2756,6 +2756,31 @@ format_struct = Struct(
                     setHasUnsavedChanges(false);
                     setParseStatus(`>>> Showing packet ${newIndex} of ${pcapPackets.length - 1} (${packet.data.length} bytes)`);
                 };
+
+                // PCAP keyboard navigation: n=next, p=prev, g=first, G=last
+                useEffect(() => {
+                    if (!isPcapFile) return;
+                    const onKey = (e) => {
+                        const t = e.target;
+                        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+                        if (e.ctrlKey || e.altKey || e.metaKey) return;
+                        if (e.key === 'n') {
+                            e.preventDefault();
+                            handlePacketChange(currentPacketIndex + 1);
+                        } else if (e.key === 'p') {
+                            e.preventDefault();
+                            handlePacketChange(currentPacketIndex - 1);
+                        } else if (e.key === 'g') {
+                            e.preventDefault();
+                            handlePacketChange(0);
+                        } else if (e.key === 'G') {
+                            e.preventDefault();
+                            handlePacketChange(pcapPackets.length - 1);
+                        }
+                    };
+                    document.addEventListener('keydown', onKey);
+                    return () => document.removeEventListener('keydown', onKey);
+                }, [isPcapFile, currentPacketIndex, pcapPackets]);
                 
                 const flattenFields = (fields, list = []) => {
                     fields.forEach((field, topLevelIndex) => {
@@ -2940,7 +2965,7 @@ format_struct = Struct(
                                 </div>
                                 <div className="flex items-center space-x-2">
                                     <button onClick={loadSampleFile} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Sample</button>
-                                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="*,.pcap,.pcapng" />
+                                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} />
                                     <button onClick={() => fileInputRef.current?.click()} disabled={isLoading} className="px-4 py-2 btn-terminal rounded">Open File</button>
                                     <button onClick={toggleBuildMode} disabled={isLoading || isPcapFile} className="px-4 py-2 btn-terminal rounded" style={isBuildMode ? {background:'#238636'} : {}}>
                                         {isBuildMode ? '🔨 Build Mode' : '🔨 Build'}
@@ -2956,6 +2981,52 @@ format_struct = Struct(
                                 </div>
                                 <span className="opacity-70">{parseStatus}</span>
                             </div>
+                            {isPcapFile && pcapPackets.length > 0 && (
+                                <div className="mt-2 flex items-center space-x-2 text-sm">
+                                    <button
+                                        onClick={() => handlePacketChange(0)}
+                                        disabled={currentPacketIndex === 0}
+                                        className="px-2 py-1 btn-terminal rounded text-xs"
+                                        title="First packet (g)"
+                                    >⏮ First</button>
+                                    <button
+                                        onClick={() => handlePacketChange(currentPacketIndex - 1)}
+                                        disabled={currentPacketIndex === 0}
+                                        className="px-2 py-1 btn-terminal rounded text-xs"
+                                        title="Previous packet (p)"
+                                    >◀ Prev</button>
+                                    <span className="text-green-400">
+                                        Packet
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            max={pcapPackets.length - 1}
+                                            value={currentPacketIndex}
+                                            onChange={(e) => {
+                                                const v = parseInt(e.target.value, 10);
+                                                if (!isNaN(v)) handlePacketChange(v);
+                                            }}
+                                            className="mx-2 w-16 px-1 py-0.5 bg-[#0d1117] border border-[#30363d] rounded text-center"
+                                        />
+                                        / {pcapPackets.length - 1}
+                                    </span>
+                                    <button
+                                        onClick={() => handlePacketChange(currentPacketIndex + 1)}
+                                        disabled={currentPacketIndex >= pcapPackets.length - 1}
+                                        className="px-2 py-1 btn-terminal rounded text-xs"
+                                        title="Next packet (n)"
+                                    >Next ▶</button>
+                                    <button
+                                        onClick={() => handlePacketChange(pcapPackets.length - 1)}
+                                        disabled={currentPacketIndex >= pcapPackets.length - 1}
+                                        className="px-2 py-1 btn-terminal rounded text-xs"
+                                        title="Last packet (G)"
+                                    >Last ⏭</button>
+                                    <span className="opacity-60 text-xs ml-2">
+                                        ({pcapPackets[currentPacketIndex]?.data?.length || 0} bytes) — keys: n/p, g/G
+                                    </span>
+                                </div>
+                            )}
                         </header>
                         
                         <div className="flex-1 flex overflow-hidden">
@@ -2973,15 +3044,20 @@ format_struct = Struct(
                                         const t = CONSTRUCT_LIBRARY[e.target.value];
                                         if (t) {
                                             setStructDef(t.code);
-                                            setParseStatus(`>>> Loaded template: ${t.name}`);
-                                            if (t.sample) {
+                                            // Preserve currently loaded file data; only seed sample bytes
+                                            // when nothing is loaded yet, so switching templates does not
+                                            // clobber the user's data being analyzed.
+                                            if (t.sample && !fileData) {
                                                 const hex = t.sample.replace(/[^0-9A-Fa-f]/g, '');
                                                 const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
                                                 setFileData(bytes);
                                                 setOriginalFileData(bytes);
                                                 setFileName(`${e.target.value}_sample.bin`);
                                                 setHasUnsavedChanges(false);
+                                                setParseStatus(`>>> Loaded template: ${t.name} (with sample)`);
                                                 setTimeout(() => handleParse(true), 100);
+                                            } else {
+                                                setParseStatus(`>>> Loaded template: ${t.name}`);
                                             }
                                         }
                                         e.target.value = "";
