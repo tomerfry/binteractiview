@@ -1,0 +1,33 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const { encodeInteger, encodeScalar, createHighlightLookup } = require('../web-helpers.js');
+assert.deepEqual([...encodeInteger('4660',2,{endian:'big'})],[0x12,0x34]);
+assert.deepEqual([...encodeInteger('-2',2,{endian:'little',signed:true})],[254,255]);
+assert.equal(Buffer.from(encodeInteger('18446744073709551615',8)).toString('hex'),'ffffffffffffffff');
+assert.throws(()=>encodeInteger('256',1));
+assert.throws(()=>encodeInteger('12ab',2));
+assert.throws(()=>encodeInteger('-1',1));
+assert.equal(Buffer.from(encodeScalar('1.5',4,{type:'float',endian:'big'})).toString('hex'),'3fc00000');
+assert.deepEqual([...encodeScalar('false',1,{type:'boolean'})],[0]);
+assert.throws(()=>encodeScalar('1e100',4,{type:'float'}));
+const ranges=Array.from({length:100000},(_,i)=>({offset:i*4,length:3,topLevelIndex:i%8}));
+const lookup=createHighlightLookup(ranges);
+for(let i=0;i<100000;i+=37) {
+    assert.equal(lookup(i*4),ranges[i]);
+    assert.equal(lookup(i*4+3),null);
+}
+const overlap=[{offset:10,length:4},{offset:0,length:30},{offset:2,length:50}];
+const find=createHighlightLookup(overlap);
+for(let i=0;i<60;i++) assert.equal(find(i),overlap.find(r=>i>=r.offset && i<r.offset+r.length)||null);
+const page=fs.readFileSync('index.html','utf8');
+const parser=require('../.test-deps/node_modules/@babel/parser');
+for(const script of page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) parser.parse(script[1],{plugins:['jsx']});
+for(const name of ['construct-worker.js','web-helpers.js','full-formats.js']) parser.parse(fs.readFileSync(name,'utf8'));
+const library=page.match(/const CONSTRUCT_LIBRARY = ([\s\S]*?);\s*<\/script>/)[0].replace(/\s*<\/script>$/,'');
+const context=vm.createContext({});
+vm.runInContext(library,context);
+vm.runInContext(fs.readFileSync('full-formats.js','utf8'),context);
+fs.mkdirSync('.test-deps',{recursive:true});
+fs.writeFileSync('.test-deps/samples.json',vm.runInContext('JSON.stringify(CONSTRUCT_LIBRARY)',context));
+console.log('Byte editing, 100,000-field highlighting, overlapping ranges and template extraction passed.');

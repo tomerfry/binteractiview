@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BinTV Web - Binary Structure Viewer (Focused Edition)</title>
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -1095,8 +1094,10 @@ format_struct = Struct(
         };
     </script>
     
+    <script src="full-formats.js"></script>
+    <script src="web-helpers.js"></script>
     <script type="text/babel">
-        const { useState, useEffect, useRef, useCallback } = React;
+        const { useState, useEffect, useRef, useCallback, useMemo } = React;
         
         // Utility functions
         const formatHex = (byte) => byte.toString(16).padStart(2, '0').toUpperCase();
@@ -1111,14 +1112,51 @@ format_struct = Struct(
         
         // Static Python helpers
         const PYTHON_BOOTSTRAP = `
+"""Python runtime embedded into index.html by tests/sync_web.py."""
 import json
 import traceback
-import struct
+import copy
+import math
 from construct import *
 
-# --- 1. Instrumentation & UI Helpers ---
 _ui_roots = []
 _ui_stack = []
+_struct = None
+
+def load_structure(code):
+    global _struct
+    _struct = None
+    namespace = dict(globals())
+    for name in ('format_struct', 'struct', 'packet', 'header'):
+        namespace.pop(name, None)
+    exec(code, namespace)
+    for name in ('format_struct', 'struct', 'packet', 'header'):
+        if isinstance(namespace.get(name), Construct):
+            _struct = namespace[name]
+            return
+    raise ValueError('Define format_struct = Struct(...)')
+
+def get_type_info(sc):
+    if isinstance(sc, Renamed): return get_type_info(sc.subcon)
+    if isinstance(sc, (Const, Computed, Rebuild)):
+        return {'type': 'const', 'value': str(getattr(sc, 'value', 'automatic'))}
+    if isinstance(sc, Enum): return {'type': 'enum', 'values': list(sc.encmapping)}
+    if isinstance(sc, FlagsEnum): return {'type': 'json'}
+    if isinstance(sc, StringEncoded): return {'type': 'string'}
+    if isinstance(sc, Adapter): return {'type': 'json'}
+    if isinstance(sc, FormatField):
+        fmt = sc.fmtstr
+        return {'type': 'float' if fmt[-1] in 'efd' else 'integer',
+                'size': sc.length, 'signed': fmt[-1] in 'bhiq',
+                'endian': 'little' if fmt[0] == '<' else 'big'}
+    if sc is Flag: return {'type': 'boolean', 'size': 1}
+    if isinstance(sc, Bytes):
+        return {'type': 'bytes', 'size': sc.length if isinstance(sc.length, int) else None}
+    if sc is GreedyBytes: return {'type': 'bytes', 'size': None}
+    if isinstance(sc, (Array, GreedyRange, RepeatUntil, Struct, Switch, IfThenElse)):
+        return {'type': 'json'}
+    if isinstance(sc, Subconstruct): return get_type_info(sc.subcon)
+    return {'type': 'json'}
 
 class InstrumentedWrapper(Subconstruct):
     def __init__(self, subcon, name):
@@ -1126,285 +1164,164 @@ class InstrumentedWrapper(Subconstruct):
         self.name = name
 
     def _parse(self, stream, context, path):
-        node = { "name": self.name, "children": [], "value": None, "offset": 0, "length": 0, "rawValue": None }
-        if _ui_stack: _ui_stack[-1]['children'].append(node)
-        else: _ui_roots.append(node)
+        start = stream.tell()
+        node = dict(name=self.name, children=[], offset=start, length=0,
+                    value=None, rawValue=None, info=get_type_info(self.subcon))
+        (_ui_stack[-1]['children'] if _ui_stack else _ui_roots).append(node)
         _ui_stack.append(node)
-        start_offset = stream.tell()
         try:
             obj = self.subcon._parse(stream, context, path)
-            end_offset = stream.tell()
-            node['offset'] = start_offset
-            node['length'] = end_offset - start_offset
-            node['rawValue'] = obj
-            node['value'] = self._format_value(obj, node['length'])
+            node['length'] = max(0, stream.tell() - start)
+            if isinstance(obj, bytes):
+                node['value'] = obj[:16].hex().upper() + (f'... ({len(obj)} bytes)' if len(obj) > 16 else '')
+            elif isinstance(obj, (dict, list)):
+                node['value'] = f'{len(obj)} items'
+            else:
+                node['value'] = str(obj)
+                if isinstance(obj, (int, float, str, bool)):
+                    node['rawValue'] = str(obj) if (isinstance(obj, int) and abs(obj) > 2**53 - 1) or (isinstance(obj, float) and not math.isfinite(obj)) else obj
             return obj
-        except Exception as e:
-            node['error'] = str(e)
-            raise e
         finally:
             _ui_stack.pop()
-            
-    def _build(self, obj, stream, context, path):
-        return self.subcon._build(obj, stream, context, path)
 
-    def _format_value(self, val, length):
-        if isinstance(val, bytes):
-            if len(val) > 16: return f"{val[:8].hex().upper()}... ({len(val)} bytes)"
-            return val.hex().upper()
-        if isinstance(val, int):
-            if length == 1: return f"0x{val:02X} ({val})"
-            if length == 2: return f"0x{val:04X} ({val})"
-            if length == 4: return f"0x{val:08X} ({val})"
-            return f"0x{val:X} ({val})"
-        return str(val)
-
-def instrument_structure(sc, name=""):
-    if isinstance(sc, Renamed): 
-        return instrument_structure(sc.subcon, sc.name)
-    
+def instrument_structure(sc, name=''):
+    if isinstance(sc, Renamed): return instrument_structure(sc.subcon, sc.name)
+    clone = copy.copy(sc)
     if isinstance(sc, Struct):
-        new_subcons = [instrument_structure(sub, sub.name) for sub in sc.subcons]
-        return InstrumentedWrapper(Struct(*new_subcons), name or "Struct")
-    
-    elif isinstance(sc, Array):
-        return InstrumentedWrapper(Array(sc.count, instrument_structure(sc.subcon, "")), name or "Array")
-    
-    # --- NEW: Explicitly handle Pointer to fix the ELF issue ---
-    elif isinstance(sc, Pointer):
-        # We recurse into the subcon so the UI sees the inner structure
-        new_subcon = instrument_structure(sc.subcon, "")
-        return InstrumentedWrapper(Pointer(sc.offset, new_subcon), name or "Pointer")
-    # -----------------------------------------------------------
+        clone.subcons = [instrument_structure(sub, sub.name) for sub in sc.subcons]
+    elif isinstance(sc, Switch):
+        clone.cases = {key: instrument_structure(sub, str(key)) for key, sub in sc.cases.items()}
+        clone.default = instrument_structure(sc.default, 'default')
+    elif isinstance(sc, IfThenElse):
+        clone.thensubcon = instrument_structure(sc.thensubcon, name)
+        clone.elsesubcon = instrument_structure(sc.elsesubcon, name)
+    elif isinstance(sc, (Array, GreedyRange, RepeatUntil, Pointer)):
+        clone.subcon = instrument_structure(sc.subcon, '')
+    return InstrumentedWrapper(clone, name or type(sc).__name__)
 
-    else:
-        field_name = name or getattr(sc, "name", None) or type(sc).__name__
-        return InstrumentedWrapper(sc, field_name)
+def parse_fields(data):
+    global _ui_roots, _ui_stack
+    _ui_roots, _ui_stack = [], []
+    instrument_structure(_struct, 'root').parse(bytes(data))
+    return _ui_roots[0]['children'] or _ui_roots
 
-# --- 2. Schema Introspection Helpers ---
-# Find def get_type_info(sc): and replace it with this:
-# --- 2. Schema Introspection Helpers ---
-def get_type_info(sc):
-    # Unwrap wrappers to find the real type
-    if isinstance(sc, Renamed): return get_type_info(sc.subcon)
-    if isinstance(sc, Subconstruct): return get_type_info(sc.subcon)
-    
-    # Identify types
-    if isinstance(sc, FormatField):
-        return {"type": "integer", "size": sc.length, "signed": getattr(sc, "signed", False)}
-    if isinstance(sc, Bytes):
-        size = sc.length if isinstance(sc.length, int) else None
-        return {"type": "bytes", "size": size}
-    if isinstance(sc, Const):
-        val = sc.value
-        if isinstance(val, bytes): val = val.hex().upper()
-        return {"type": "const", "value": val}
-    if isinstance(sc, Enum):
-        return {"type": "enum", "values": sc.encmapping}
-        
-    return {"type": "unknown", "repr": str(type(sc))}
-    
-def extract_schema(sc, path=""):
+def extract_schema(sc):
     fields = []
-    
-    def walk(subcon, current_path):
-        # 1. Handle Renamed: Update path and recurse
-        if isinstance(subcon, Renamed):
-            name = subcon.name
-            walk(subcon.subcon, current_path + [name])
-            return
-
-        # 2. Handle Struct: Iterate children
-        if isinstance(subcon, Struct):
-            for sub in subcon.subcons:
-                walk(sub, current_path)
-            return
-            
-        # 3. Handle Array: (Optional) You can decide to recurse or treat as leaf
-        # For now, let's treat dynamic arrays as leaves to avoid infinite recursion
-        if isinstance(subcon, Array):
-            pass 
-
-        # 4. Handle Wrappers (EncryptedSym, Aligned, Default, etc.)
-        # Crucial: If it is a Subconstruct but NOT Renamed, we just tunnel through.
-        if isinstance(subcon, Subconstruct):
-            walk(subcon.subcon, current_path)
-            return
-
-        # 5. Leaf Nodes: Add to fields list if they have a path
-        if current_path:
-            info = get_type_info(subcon)
-            fields.append({ 
-                "id": ".".join(current_path), 
-                "name": current_path[-1], 
-                "path": current_path, 
-                "info": info 
-            })
-            
+    def walk(sc, path):
+        if isinstance(sc, Renamed):
+            walk(sc.subcon, path + [sc.name])
+        elif isinstance(sc, Struct):
+            for sub in sc.subcons: walk(sub, path)
+        elif path:
+            fields.append(dict(id='.'.join(path), name=path[-1], path=path, info=get_type_info(sc)))
     walk(sc, [])
     return fields
 
-def get_struct_obj():
-    for name in ['format_struct', 'struct', 'packet', 'header']:
-        if name in globals() and isinstance(globals()[name], Construct):
-            return globals()[name]
-    return None
+def json_value(value):
+    if isinstance(value, bytes): return value.hex()
+    if isinstance(value, dict): return {k: json_value(v) for k, v in value.items() if not k.startswith('_')}
+    if isinstance(value, list): return [json_value(v) for v in value]
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53 - 1: return str(value)
+    return value
 
-def get_schema_json():
-    s = get_struct_obj()
-    if not s: return {"error": "No struct found"}
-    try:
-        return {"schema": extract_schema(s)}
-    except Exception as e:
-        return {"error": str(e)}
+def get_schema_json(data=None):
+    schema = extract_schema(_struct)
+    values = {}
+    if data is not None:
+        try:
+            parsed = _struct.parse(bytes(data))
+            for field in schema:
+                value = parsed
+                for part in field['path']: value = value[part]
+                value = json_value(value)
+                values[field['id']] = json.dumps(value) if field['info']['type'] == 'json' else value
+        except Exception:
+            pass  # A new definition may not match the currently open file.
+    return {'schema': schema, 'values': values}
+
+def convert_value(sc, value, context=None):
+    if isinstance(sc, Renamed): return convert_value(sc.subcon, value, context)
+    if isinstance(sc, FlagsEnum): return {key: convert_value(Flag, item) for key, item in value.items()}
+    if isinstance(sc, Adapter) and not isinstance(sc, (StringEncoded, Enum)): return value
+    if isinstance(sc, Struct):
+        local = Container(value)
+        local['_'] = context
+        local['_root'] = context.get('_root', context) if context is not None else local
+        result = Container()
+        for sub in sc.subcons:
+            if sub.name in value:
+                result[sub.name] = convert_value(sub, value[sub.name], local)
+                local[sub.name] = result[sub.name]
+        return result
+    if isinstance(sc, (Array, GreedyRange, RepeatUntil)):
+        return [convert_value(sc.subcon, v, context) for v in value]
+    if isinstance(sc, Switch):
+        key = sc.keyfunc(context) if callable(sc.keyfunc) else sc.keyfunc
+        return convert_value(sc.cases.get(key, sc.default), value, context)
+    if isinstance(sc, IfThenElse):
+        condition = sc.condfunc(context) if callable(sc.condfunc) else sc.condfunc
+        return convert_value(sc.thensubcon if condition else sc.elsesubcon, value, context)
+    info = get_type_info(sc)
+    kind = info['type']
+    if kind == 'bytes': return bytes.fromhex(value.removeprefix('0x')) if isinstance(value, str) else bytes(value)
+    if kind == 'integer':
+        return int(value, 16 if value.lower().lstrip('+-').startswith('0x') else 10) if isinstance(value, str) else int(value)
+    if kind == 'float': return float(value)
+    if kind == 'boolean':
+        if value in (True, 'true', '1', 1): return True
+        if value in (False, 'false', '0', 0): return False
+        raise ValueError('Boolean must be true or false')
+    if isinstance(sc, Subconstruct) and kind == 'json': return convert_value(sc.subcon, value, context)
+    return value
 
 def build_and_parse_live(values_json):
-    global _ui_roots, _ui_stack
-    s = get_struct_obj()
-    if not s: return {"error": "No struct found"}
     try:
         vals = json.loads(values_json)
         container = Container()
-        
-        def set_nested(root, path, value):
-            curr = root
-            for p in path[:-1]:
-                if p not in curr: curr[p] = Container()
-                curr = curr[p]
-            
-            final_val = value
-            # Handle hex strings for bytes fields
-            if isinstance(value, str):
-                clean = value.replace(' ', '').replace('0x', '')
-                
-                # --- FIX START ---
-                if len(clean) == 0:
-                    final_val = b""  # Explicitly handle empty string as empty bytes
-                elif all(c in '0123456789ABCDEFabcdef' for c in clean):
-                # --- FIX END ---
-                
-                    if len(clean) % 2 == 0 and len(clean) > 0:
-                        try: 
-                            final_val = bytes.fromhex(clean)
-                        except: pass
-
-            curr[path[-1]] = final_val
-
-        for key, val in vals.items():
-            set_nested(container, key.split('.'), val)
-
-        # Build
-        data = s.build(container)
-        
-        # Parse Back for Highlighting
-        _ui_roots = []
-        _ui_stack = []
-        instrumented = instrument_structure(s, "root")
-        instrumented.parse(data)
-        
-        def clean_node(n):
-            return {
-                "name": n['name'], "value": n['value'], "offset": n['offset'], "length": n['length'],
-                "children": [clean_node(c) for c in n['children']]
-            }
-        
-        fields = [clean_node(n) for n in _ui_roots]
-        if len(fields) == 1 and fields[0]['name'] == 'root': fields = fields[0]['children']
-
-        return { "hex": data.hex(), "fields": fields }
-    except Exception as e:
-        return {"error": str(e), "traceback": traceback.format_exc()}
+        for field in extract_schema(_struct):
+            if field['info']['type'] == 'const' or field['id'] not in vals: continue
+            value = vals[field['id']]
+            if field['info']['type'] == 'json' and isinstance(value, str): value = json.loads(value)
+            curr = container
+            for part in field['path'][:-1]: curr = curr.setdefault(part, Container())
+            curr[field['path'][-1]] = value
+        data = _struct.build(convert_value(_struct, container))
+        return {'hex': data.hex(), 'fields': parse_fields(data)}
+    except Exception as exc:
+        return {'error': str(exc), 'traceback': traceback.format_exc()}
 `;
         
+        let worker;
+        let workerId = 0;
+        const pendingPython = new Map();
+        const workerCall = (payload) => new Promise((resolve, reject) => {
+            const id = ++workerId;
+            pendingPython.set(id, { resolve, reject });
+            worker.postMessage({ id, ...payload });
+        });
         const initPyodide = async () => {
-            if (pyodideReady) return pyodide;
-            
-            console.log('Loading Pyodide...');
-            pyodide = await loadPyodide({
-                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
-            });
-            
-            await pyodide.loadPackage(['micropip']);
-            const micropip = pyodide.pyimport('micropip');
-            await micropip.install('construct');
-            
-            try { await pyodide.loadPackage('cryptography'); } catch (err) {}
-            
-            console.log('Bootstrapping Python environment...');
-            await pyodide.runPythonAsync(PYTHON_BOOTSTRAP);
-            
-            console.log('Pyodide ready!');
+            worker = new Worker('construct-worker.js');
+            worker.onmessage = ({ data }) => {
+                const pending = pendingPython.get(data.id);
+                if (!pending) return;
+                pendingPython.delete(data.id);
+                data.error ? pending.reject(new Error(data.error)) : pending.resolve(data.result);
+            };
+            worker.onerror = (event) => {
+                pendingPython.forEach(p => p.reject(new Error(event.message || 'Python worker failed')));
+                pendingPython.clear();
+            };
+            await workerCall({ action: 'init', bootstrap: PYTHON_BOOTSTRAP });
+            pyodide = true;
             pyodideReady = true;
-            return pyodide;
         };
-        
-        
-        const parseWithConstruct = async (data, structCode) => {
-            if (!pyodideReady) throw new Error('Pyodide not ready');
-            
-            try {
-                const dataArray = Array.from(data);
-                const dataBytes = pyodide.toPy(dataArray);
-                pyodide.globals.set('data_list', dataBytes);
-                
-                // FIXED: We explicitly assign the output to 'output_json' and return it at the end
-                const runnerCode = `
-${structCode}
+        const runConstruct = (code, action, input = null) => workerCall({ code, action, input });
+        const parseWithConstruct = (data, code) => runConstruct(
+            code, 'json.dumps(parse_fields(input_value.to_py()))', data);
 
-import json
-import traceback
-
-output_json = ""
-
-try:
-    s = get_struct_obj()
-    if not s: raise Exception("No struct found")
-    
-    global _ui_roots, _ui_stack
-    _ui_roots = []
-    _ui_stack = []
-    
-    inst = instrument_structure(s, "root")
-    inst.parse(bytes(data_list))
-    
-    def clean_node(n):
-        return {
-            "name": n['name'], "value": n['value'], "offset": n['offset'], "length": n['length'],
-            "rawValue": n['rawValue'] if isinstance(n['rawValue'], (int, str, bool, type(None))) else None,
-            "children": [clean_node(c) for c in n['children']]
-        }
-    
-    final_fields = [clean_node(n) for n in _ui_roots]
-    if len(final_fields) == 1 and final_fields[0]['name'] == 'root':
-            final_fields = final_fields[0]['children']
-            
-    output_json = json.dumps({"fields": final_fields})
-except Exception as e:
-    output_json = json.dumps({"error": str(e), "traceback": traceback.format_exc()})
-
-# The last line is the return value for runPythonAsync
-output_json
-`;
-                
-                const result = await pyodide.runPythonAsync(runnerCode);
-                
-                // Guard against empty result
-                if (!result) return [];
-                
-                const parsed = JSON.parse(result);
-                
-                if (parsed.error) throw new Error(parsed.error);
-                return parsed.fields || [];
-                
-            } catch (error) {
-                console.error('Parse error:', error);
-                throw error;
-            }
-        };
-        
         const SmartInput = ({ field, value, onChange, onFocus }) => {
             // Initial mode: integers use 'int', bytes default to 'hex'
-            const initialMode = field.info.type === 'integer' ? 'int' : 'hex';
+            const initialMode = field.info.type === 'bytes' ? 'hex' : 'int';
             const [mode, setMode] = useState(initialMode);
             const [localValue, setLocalValue] = useState('');
             const [isFocused, setIsFocused] = useState(false);
@@ -1425,7 +1342,7 @@ output_json
                     return;
                 }
                 
-                if (type === 'integer') {
+                if (type !== 'bytes') {
                     setLocalValue(value.toString());
                 } 
                 else if (type === 'bytes') {
@@ -1466,14 +1383,7 @@ output_json
                 
                 if (mode === 'int') {
                     setLocalValue(newValue);
-                    // Standard integer validation
-                    if (/^(0x)?[0-9A-Fa-f]*$/.test(newValue)) {
-                        let num = newValue.startsWith('0x') ? parseInt(newValue, 16) : parseInt(newValue, 10);
-                        const maxVal = size ? Math.pow(2, size * 8) - 1 : Number.MAX_SAFE_INTEGER;
-                        if (!isNaN(num) && num <= maxVal) {
-                            onChange(field.id, num);
-                        }
-                    }
+                    onChange(field.id, newValue);
                 }
                 else if (mode === 'hex') {
                     // --- Reactive Hex Logic ---
@@ -1607,27 +1517,25 @@ output_json
             );
         };
         
-        const LiveBuilder = ({ pyodide, structDef, onBuildComplete }) => { 
+        const LiveBuilder = ({ pyodide, structDef, initialData, onBuildComplete }) => {
             const [schema, setSchema] = useState([]);
+            const [schemaReady, setSchemaReady] = useState(false);
             const [values, setValues] = useState({});
             const [status, setStatus] = useState("Initializing...");
             const [error, setError] = useState(null);
             
             // Load Schema on Mount
             useEffect(() => {
+                let cancelled = false;
+                setSchema([]);
+                setSchemaReady(false);
                 const loadSchema = async () => {
                     try {
                         if (!pyodide) return;
                         
-                        // 1. Define the user's struct in Python first!
-                        await pyodide.runPythonAsync(structDef);
-                        
-                        // 2. Now ask for the schema
-                        const res = await pyodide.runPythonAsync(`
-                            import json
-                            json.dumps(get_schema_json())
-                        `);                        
-                        const data = JSON.parse(res);
+                        const res = await runConstruct(structDef, 'json.dumps(get_schema_json(input_value.to_py() if input_value is not None else None))', initialData);
+                        const data = res;
+                        if (cancelled) return;
                         
                         if (data.error) {
                             setError(data.error);
@@ -1636,6 +1544,7 @@ output_json
                             setSchema(data.schema || []);
                             setError(null);
                             setStatus("Ready");
+                            setSchemaReady(true);
                             
                             // Initialize default values based on schema
                             const defaults = {};
@@ -1643,54 +1552,49 @@ output_json
                                 if (f.info.type === 'const') return;
                                 // FIX: Change (f.info.size || 1) to (f.info.size || 0)
                                 // This ensures dynamic fields start empty (matching the default 0 length integers)
-                                defaults[f.id] = f.info.type === 'bytes' ? '00'.repeat(f.info.size || 0) : 0;
+                                defaults[f.id] = f.info.type === 'bytes' ? '00'.repeat(f.info.size || 0) : f.info.type === 'json' ? '[]' : f.info.type === 'string' ? '' : f.info.type === 'enum' ? f.info.values[0] : f.info.type === 'boolean' ? 'false' : '0';
                             });
-                            setValues(defaults);
+                            setValues({ ...defaults, ...data.values });
                         }
                     } catch (e) {
-                        setError("Failed to load struct schema: " + e.message);
+                        if (!cancelled) setError("Failed to load struct schema: " + e.message);
                     }
                 };
                 loadSchema();
+                return () => { cancelled = true; };
             }, [pyodide, structDef]);
             
             // Debounced Live Build
             useEffect(() => {
-                if (schema.length === 0 || !pyodide) return;
+                if (!schemaReady || !pyodide) return;
                 
+                let cancelled = false;
                 const timer = setTimeout(async () => {
                     setStatus("Building...");
                     try {
-                        const jsonValues = JSON.stringify(values);
-                        // We need to escape the JSON string for Python
-                        const safeJson = jsonValues.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                        
-                        const res = await pyodide.runPythonAsync(`
-                            import json
-                            json.dumps(build_and_parse_live('${safeJson}'))
-                        `);
-                        
-                        const result = JSON.parse(res);
-                        
+                        const result = await runConstruct(structDef,
+                            'json.dumps(build_and_parse_live(input_value))', JSON.stringify(values));
+                        if (cancelled) return;
+
                         if (result.error) {
                             // Don't show hard error overlay, just status
                             setStatus("Build Invalid: " + result.error.split('\n').pop());
                         } else {
                             // Convert hex string back to Uint8Array
                             const hex = result.hex;
-                            const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                            const bytes = new Uint8Array((hex.match(/.{1,2}/g) || []).map(byte => parseInt(byte, 16)));
                             
                             onBuildComplete(bytes, result.fields);
                             setStatus("✓ Live Preview Updated");
                         }
                     } catch (e) {
                         console.error(e);
-                        setStatus("Build Error");
+                        if (!cancelled) setStatus("Build Error: " + e.message);
                     }
                 }, 300); // 300ms debounce
                 
-                return () => clearTimeout(timer);
-            }, [values, schema, pyodide]);
+                return () => { cancelled = true; clearTimeout(timer); };
+            }, [values, schema, schemaReady, pyodide, structDef]);
             
             const handleValueChange = (id, val) => {
                 setValues(prev => ({ ...prev, [id]: val }));
@@ -1713,7 +1617,7 @@ output_json
                 </div>
                 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 scrollbar-thin">
-                    {schema.length === 0 && !error && (
+                    {!schemaReady && !error && (
                         <div className="text-center text-gray-600 mt-10">
                             <div className="loading-spinner w-6 h-6 border-2 mx-auto mb-2"></div>
                             Analyzing Structure...
@@ -1741,6 +1645,7 @@ output_json
                 // Hex View Component with Virtual Scrolling
                 const HexView = ({ data, highlightRanges = [], onByteClick, selectedField, hoveredField }) => {
                     const [scrollTop, setScrollTop] = useState(0);
+                    const [containerHeight, setContainerHeight] = useState(600);
                     const containerRef = useRef(null);
                     
                     const bytesPerLine = 16;
@@ -1748,31 +1653,46 @@ output_json
                     const overscan = 10; // render extra lines above/below viewport
                     
                     const totalLines = Math.ceil(data.length / bytesPerLine);
-                    const totalHeight = totalLines * lineHeight;
+                    // Browsers cap element heights; map large files onto a bounded scrollbar.
+                    const logicalHeight = totalLines * lineHeight;
+                    const totalHeight = Math.min(logicalHeight, 8000000);
+                    const scrollScale = Math.max(1, (logicalHeight - containerHeight) / Math.max(1, totalHeight - containerHeight));
+                    const logicalScrollTop = scrollTop * scrollScale;
+                    useEffect(() => {
+                        const observer = new ResizeObserver(entries => setContainerHeight(entries[0].contentRect.height));
+                        observer.observe(containerRef.current);
+                        return () => observer.disconnect();
+                    }, []);
+                    useEffect(() => {
+                        if (!selectedField) return;
+                        containerRef.current.scrollTop = Math.floor(selectedField.offset / bytesPerLine) * lineHeight / scrollScale;
+                        setScrollTop(containerRef.current.scrollTop);
+                    }, [selectedField, scrollScale]);
+                    useEffect(() => {
+                        setScrollTop(containerRef.current.scrollTop);
+                    }, [data.length]);
                     
                     // Calculate visible range
-                    const containerHeight = containerRef.current?.clientHeight || 600;
                     const visibleLines = Math.ceil(containerHeight / lineHeight);
-                    const startLine = Math.max(0, Math.floor(scrollTop / lineHeight) - overscan);
+                    const startLine = Math.max(0, Math.min(totalLines - visibleLines, Math.floor(logicalScrollTop / lineHeight)) - overscan);
                     const endLine = Math.min(totalLines, startLine + visibleLines + overscan * 2);
                     
                     const handleScroll = (e) => {
-                        setScrollTop(e.target.scrollTop);
+                        const next = e.target.scrollTop;
+                        setScrollTop(previous => previous === next ? previous : next);
                     };
                     
+                    const lookupHighlight = useMemo(() => createHighlightLookup(highlightRanges), [highlightRanges]);
                     const getHighlightClass = (byteIndex) => {
                         // Check if this byte is in the hovered field
                         const isHovered = hoveredField && 
                         byteIndex >= hoveredField.offset && 
                         byteIndex < hoveredField.offset + hoveredField.length;
                         
-                        for (let i = 0; i < highlightRanges.length; i++) {
-                            const range = highlightRanges[i];
-                            if (byteIndex >= range.offset && byteIndex < range.offset + range.length) {
-                                // Use topLevelIndex for color instead of range index
-                                const baseClass = `field-highlight-${range.topLevelIndex % 8}`;
-                                return isHovered ? `${baseClass} hovered` : baseClass;
-                            }
+                        const range = lookupHighlight(byteIndex);
+                        if (range) {
+                            const baseClass = `field-highlight-${range.topLevelIndex % 8}`;
+                            return isHovered ? `${baseClass} hovered` : baseClass;
                         }
                         return '';
                     };
@@ -1781,8 +1701,8 @@ output_json
                     const visibleLineElements = [];
                     for (let lineIdx = startLine; lineIdx < endLine; lineIdx++) {
                         const offset = lineIdx * bytesPerLine;
-                        const lineData = data.slice(offset, Math.min(offset + bytesPerLine, data.length));
-                        const y = lineIdx * lineHeight;
+                        const lineData = data.subarray(offset, Math.min(offset + bytesPerLine, data.length));
+                        const y = lineIdx * lineHeight - logicalScrollTop + scrollTop;
                         
                         visibleLineElements.push(
                         <div 
@@ -1860,16 +1780,16 @@ output_json
         // --- 1. Initialization Logic ---
         // Determine initial mode and value based on the field data
         const getInitialState = () => {
-            const isInt = typeof field.rawValue === 'number';
+            const isInt = ['integer', 'boolean', 'float'].includes(field.info?.type) && field.info.size === field.length && (field.info.type !== 'float' || [4, 8].includes(field.length));
             // Default to 'int' for numbers, 'hex' for everything else (safest for binary editing)
             const initialMode = isInt ? 'int' : 'hex';
             
             let val = '';
             if (isInt) {
                 val = field.rawValue.toString();
-            } else if (field.value) {
+            } else {
                 // Extract raw hex from the display string (which might be "AA BB..." or "0x...")
-                const raw = field.value.replace(/^0x/, '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                const raw = field.editHex || '';
                 // Initial formatting
                 const chunks = raw.match(/.{1,2}/g) || [];
                 val = chunks.join(' ');
@@ -1958,40 +1878,17 @@ output_json
                 let newBytes;
                 
                 if (mode === 'int') {
-                    // Integer Validation
-                    if (!/^(0x)?[0-9A-Fa-f]+$/.test(localValue) && !/^\d+$/.test(localValue)) {
-                        throw new Error("Invalid integer format");
-                    }
-                    let val = localValue.startsWith('0x') ? parseInt(localValue, 16) : parseInt(localValue, 10);
-                    
-                    // Check Bounds
-                    const max = size === 1 ? 0xFF : size === 2 ? 0xFFFF : size === 4 ? 0xFFFFFFFF : Number.MAX_SAFE_INTEGER;
-                    if (val < 0 || val > max) throw new Error(`Value exceeds ${size} byte(s)`);
-                    
-                    // Convert to Bytes (Little Endian default for integers)
-                    newBytes = new Uint8Array(size);
-                    for (let i = 0; i < size; i++) {
-                        newBytes[i] = (val >> (i * 8)) & 0xFF;
-                    }
-                    
+                    newBytes = encodeScalar(localValue, size, field.info);
                 } else if (mode === 'hex') {
-                    // Hex Validation
-                    const raw = localValue.replace(/[^0-9A-Fa-f]/g, '');
-                    // Auto-pad with zeros if user leaves it short (e.g. "F" -> "0F")
-                    const padded = raw.padEnd(size * 2, '0');
-                    
-                    newBytes = new Uint8Array(size);
-                    for (let i = 0; i < size; i++) {
-                        newBytes[i] = parseInt(padded.substr(i*2, 2), 16);
-                    }
+                    const raw = localValue.replace(/\s/g, '');
+                    if (!/^[0-9a-f]*$/i.test(raw) || raw.length !== size * 2)
+                        throw new Error(`Enter exactly ${size} bytes (two hex digits each)`);
+                    newBytes = Uint8Array.from(raw.match(/../g) || [], byte => parseInt(byte, 16));
                 } else {
-                    // Text Validation
-                    newBytes = new Uint8Array(size); // Zero-filled by default
-                    for (let i = 0; i < Math.min(localValue.length, size); i++) {
-                        newBytes[i] = localValue.charCodeAt(i);
-                    }
+                    newBytes = new TextEncoder().encode(localValue);
+                    if (newBytes.length !== size) throw new Error(`Text must encode to exactly ${size} bytes`);
                 }
-                
+
                 onSave(field.offset, newBytes);
                 onClose();
             } catch (e) {
@@ -2005,9 +1902,20 @@ output_json
             if (mode === 'int') return; // Don't toggle out of Int mode easily to avoid confusion
             
             const newMode = mode === 'hex' ? 'text' : 'hex';
-            setMode(newMode);
-            setLocalValue(''); // Clear value on toggle to avoid conversion confusion
-            setError('');
+            try {
+                if (newMode === 'text') {
+                    const raw = localValue.replace(/\s/g, '');
+                    if (raw.length % 2) throw new Error('Complete the hex byte before switching modes');
+                    const bytes = Uint8Array.from(raw.match(/../g) || [], byte => parseInt(byte, 16));
+                    setLocalValue(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+                } else {
+                    setLocalValue(Array.from(new TextEncoder().encode(localValue), formatHex).join(' '));
+                }
+                setMode(newMode);
+                setError('');
+            } catch (error) {
+                setError('Cannot display these bytes as UTF-8 text: ' + error.message);
+            }
         };
         
         const getIcon = () => {
@@ -2235,10 +2143,11 @@ const CodeEditor = ({ value, onChange, placeholder, spellCheck = false }) => {
 
 // Structure Tree Component
 const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], onEdit, onHover }) => {
-    const [expanded, setExpanded] = useState(true);
+    const [expanded, setExpanded] = useState(depth < 2 && (node.children?.length || 0) <= 100);
+    const [childLimit, setChildLimit] = useState(100);
     const hasChildren = node.children && node.children.length > 0;
     const isSelected = JSON.stringify(currentPath) === JSON.stringify(selectedPath);
-    const canEdit = !hasChildren && node.length > 0;
+    const canEdit = !hasChildren && node.length > 0 && node.info?.type !== 'const';
     
     // Format the size display
     const sizeDisplay = node.length === 1 ? '1 byte' : `${node.length} bytes`;
@@ -2328,7 +2237,7 @@ const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], o
 </div>
 {hasChildren && expanded && (
     <div className="tree-children">
-        {node.children.map((child, idx) => (
+        {node.children.slice(0, childLimit).map((child, idx) => (
             <TreeNode
             key={idx}
             node={child}
@@ -2340,6 +2249,11 @@ const TreeNode = ({ node, depth = 0, onSelect, selectedPath, currentPath = [], o
             onHover={onHover}
             />
             ))}
+            {node.children.length > childLimit && (
+                <button className="text-xs text-blue-400 p-2" onClick={() => setChildLimit(limit => limit + 100)}>
+                    Show next {Math.min(100, node.children.length - childLimit)} fields ({node.children.length - childLimit} remaining)
+                </button>
+            )}
         </div>
         )}
     </div>
@@ -2574,12 +2488,16 @@ format_struct = Struct(
 
                 const fileInputRef = useRef(null);
                 const parseTimeoutRef = useRef(null);
+                const parseInput = useRef(null);
+                if (parseInput.current?.data !== fileData || parseInput.current?.code !== structDef || parseInput.current?.build !== isBuildMode) {
+                    parseInput.current = { data: fileData, code: structDef, build: isBuildMode };
+                }
                 
                 // --- EFFECTS ---
                 
                 // 1. Live SVG Generation
                 useEffect(() => {
-                    if (!fileData || parsedFields.length === 0) {
+                    if (viewMode !== 'svg' || !fileData || parsedFields.length === 0) {
                         setLiveSvg(null);
                         return;
                     }
@@ -2590,7 +2508,7 @@ format_struct = Struct(
                     }, 1000);
                     
                     return () => clearTimeout(timer);
-                }, [fileData, parsedFields, fileName]);
+                }, [fileData, parsedFields, fileName, viewMode]);
                 
                 // 2. Initialize Pyodide
                 useEffect(() => {
@@ -2611,7 +2529,7 @@ format_struct = Struct(
                 
                 // 3. Reactive parsing with debounce
                 useEffect(() => {
-                    if (!fileData || !pyodideReady) return;
+                    if (!fileData || !pyodideReady || isBuildMode) return;
                     
                     const hasRealContent = structDef.split('\n').some(line => {
                         const trimmed = line.trim();
@@ -2634,7 +2552,7 @@ format_struct = Struct(
                     return () => {
                         if (parseTimeoutRef.current) clearTimeout(parseTimeoutRef.current);
                     };
-                }, [structDef, fileData, pyodideReady, isPcapFile]);
+                }, [structDef, fileData, pyodideReady, isPcapFile, isBuildMode]);
                 
                 // --- HANDLERS ---
                 
@@ -2880,13 +2798,18 @@ format_struct = Struct(
                     if (!isAuto) setError(null);
                     if (!isAuto) setParseStatus('>>> Parsing structure...');
                     setIsParsing(true);
+                    const input = parseInput.current;
                     try {
                         const fields = await parseWithConstruct(fileData, structDef);
+                        if (input !== parseInput.current) return;
+                        setSelectedField(null);
+                        setHoveredField(null);
                         setParsedFields(fields);
                         setHighlightRanges(flattenFields(fields));
                         setParseStatus(`>>> Parse complete: ${fields.length} fields`);
                         setError(null);
                     } catch (err) {
+                        if (input !== parseInput.current) return;
                         console.warn('Parse failed:', err.message);
                         if (!isAuto) {
                             setError(err.message);
@@ -2895,13 +2818,13 @@ format_struct = Struct(
                             setParseStatus('>>> Parse error');
                         }
                     } finally {
-                        setIsParsing(false);
+                        if (input === parseInput.current) setIsParsing(false);
                     }
                 };
                 
-                const handleFieldSelect = (field) => { setSelectedField(field); };
-                const handleFieldHover = (field) => { setHoveredField(field); };
-                const handleFieldEdit = (field) => { setEditingField(field); };
+                const handleFieldSelect = useCallback((field) => { setSelectedField(field); }, []);
+                const handleFieldHover = useCallback((field) => { setHoveredField(field); }, []);
+                const handleFieldEdit = useCallback((field) => { setEditingField({ ...field, editHex: Array.from(fileData.subarray(field.offset, field.offset + field.length), formatHex).join('') }); }, [fileData]);
                 
                 // Menu Export Hook
                 useEffect(() => {
@@ -2925,12 +2848,13 @@ format_struct = Struct(
                 }, [fileData, fileName]);
                 
                 const handleSaveEdit = (offset, newBytes) => {
+                    if (!fileData || offset < 0 || offset + newBytes.length > fileData.length) throw new Error('Field is outside the current file');
                     const newData = new Uint8Array(fileData);
                     newData.set(newBytes, offset);
                     setFileData(newData);
                     setHasUnsavedChanges(true);
                     setParseStatus(`>>> Field edited at 0x${offset.toString(16)}`);
-                    setTimeout(() => handleParse(), 100);
+
                 };
                 
                 const handleSaveFile = () => {
@@ -2952,30 +2876,23 @@ format_struct = Struct(
                         setFileData(new Uint8Array(originalFileData));
                         setHasUnsavedChanges(false);
                         setParseStatus('>>> Changes reset');
-                        setTimeout(() => handleParse(), 100);
+
                     }
                 };
                 
                 const loadSampleFile = () => {
-                    const sample = new Uint8Array([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x57, 0x6F, 0xDE, 0xAD, 0xBE, 0xEF]);
+                    const template = CONSTRUCT_LIBRARY.zip;
+                    const sample = Uint8Array.from(template.sample.match(/../g), byte => parseInt(byte, 16));
                     setFileData(sample);
-                    setOriginalFileData(new Uint8Array(sample));
+                    setOriginalFileData(sample.slice());
                     setHasUnsavedChanges(false);
-                    setFileName('sample.bin');
+                    setFileName('sample.zip');
                     setImageMimeType(null);
                     setShowImagePreview(false);
+                    setStructDef(template.code);
                     setParseStatus(`>>> Sample loaded: ${sample.length} bytes`);
-                    setStructDef(`# Sample ZIP-like structure
-format_struct = Struct(
-    "magic" / Bytes(4),
-    "version" / Int16ul,
-    "flags" / Int16ul,
-    "size" / Int32ul,
-    "data" / Bytes(8),
-    "checksum" / Int32ul,
-)`);
                 };
-                
+
                 const toggleBuildMode = () => {
                     setIsBuildMode(!isBuildMode);
                     setParseStatus(isBuildMode ? '>>> Parse Mode' : '>>> 🔨 Build Mode');
@@ -3139,7 +3056,7 @@ format_struct = Struct(
                                             // clobber the user's data being analyzed.
                                             if (t.sample && !fileData) {
                                                 const hex = t.sample.replace(/[^0-9A-Fa-f]/g, '');
-                                                const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+                                                const bytes = new Uint8Array((hex.match(/.{1,2}/g) || []).map(b => parseInt(b, 16)));
                                                 setFileData(bytes);
                                                 setOriginalFileData(bytes);
                                                 setFileName(`${e.target.value}_sample.bin`);
@@ -3176,8 +3093,8 @@ format_struct = Struct(
                                         
                                         <div className="flex-1 overflow-y-auto border-t border-[#30363d]">
                                             {isBuildMode ? (
-                                                <LiveBuilder pyodide={pyodide} structDef={structDef} onBuildComplete={(b, f) => {
-                                                    setFileData(b); setParsedFields(f); 
+                                                <LiveBuilder pyodide={pyodide} structDef={structDef} initialData={fileData} onBuildComplete={(b, f) => {
+                                                    setFileData(b); setParsedFields(f); setHasUnsavedChanges(true);
                                                     const flatten = (nodes, topIdx) => {
                                                         const list = [];
                                                         nodes.forEach(n => {

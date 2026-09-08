@@ -6,6 +6,33 @@ A powerful TUI (Text User Interface) tool for analyzing binary files and network
 
 ## Features
 
+### Web version
+
+Serve the repository with `python -m http.server 8000` and open
+`http://localhost:8000`. Keep `index.html`, `construct-worker.js`,
+`web-helpers.js`, and `full-formats.js` together when publishing the static app.
+
+Parsing/building runs in a background worker. The hex view renders visible rows,
+indexes field highlights, and supports file sizes beyond browser element-height
+limits. Large tree collections initially show 100 children, with a button to
+reveal more.
+
+File samples use complete containers rather than isolated headers or chunks.
+The templates cover common PNG, JPEG, classic ZIP, single-member GZIP, POSIX TAR,
+newc CPIO, ELF and PE files. ZIP64, ZIP streaming data descriptors, concatenated
+GZIP members, and specialized format extensions need custom constructs. PE
+optional-header contents and filesystem tables remain raw fields; firmware
+samples demonstrate image layout rather than mountable filesystems.
+
+Build mode seeds inputs from the loaded file. Arrays and conditional structures
+use JSON inputs, with byte values written as hex strings. Integer editing respects
+signedness, endianness and 64-bit precision; float and boolean values are editable
+directly. Raw hex/text edits must preserve the field's byte length. Dependent
+lengths and checksums only update automatically when the construct uses `Rebuild`
+or equivalent logic.
+
+See [web regression checks](tests/README.md) for validation commands.
+
 ### Binary Analysis
 - 🔍 **Interactive hex dump** with field highlighting
 - 🌳 **Construct-based parsing** with live structure tree
